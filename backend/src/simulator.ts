@@ -98,6 +98,7 @@ interface Shift {
 // --- shifts ---
 
 const SHIFTS: Shift[] = [
+  // --- active shift ---
   {
     id: 'shift-skybar',
     context: {
@@ -119,49 +120,50 @@ const SHIFTS: Shift[] = [
       { type: 'guard', id: 'g-sky-002', name: 'Officer Marsh',  zoneIndex: 2, dutyStatus: 'patrolling' },
     ],
   },
-  {
-    id: 'shift-riverside',
-    context: {
-      shiftId: 'shift-riverside',
-      guardType: 'patrol',
-      venueType: 'construction_site',
-      venueName: 'Riverside Development',
-      expectedActivity: 'none',
-    },
-    zones: [
-      { label: 'Site Office',        lat: 37.7760, lng: -122.4180, sensitivity: 'controlled', authorizedHoursStart: 7, authorizedHoursEnd: 18 },
-      { label: 'Equipment Storage',  lat: 37.7762, lng: -122.4178, sensitivity: 'restricted', authorizedHoursStart: 7, authorizedHoursEnd: 18 },
-      { label: 'Active Build Zone',  lat: 37.7764, lng: -122.4175, sensitivity: 'restricted', authorizedHoursStart: 7, authorizedHoursEnd: 18 },
-      { label: 'North Perimeter',    lat: 37.7768, lng: -122.4180, sensitivity: 'controlled', authorizedHoursStart: 0, authorizedHoursEnd: 24 },
-      { label: 'South Perimeter',    lat: 37.7755, lng: -122.4180, sensitivity: 'controlled', authorizedHoursStart: 0, authorizedHoursEnd: 24 },
-    ],
-    agents: [
-      { type: 'guard', id: 'g-rv-001', name: 'Officer Chen',    zoneIndex: 3, dutyStatus: 'patrolling' },
-      { type: 'robot', id: 'r-rv-001', name: 'Robot Alpha',     zoneIndex: 4 },
-    ],
-  },
-  {
-    id: 'shift-arena',
-    context: {
-      shiftId: 'shift-arena',
-      guardType: 'event',
-      venueType: 'concert',
-      venueName: 'Arena North',
-      expectedActivity: 'high',
-    },
-    zones: [
-      { label: 'Entry Gates',      lat: 37.7730, lng: -122.4210, sensitivity: 'public',     authorizedHoursStart: 16, authorizedHoursEnd: 23 },
-      { label: 'GA Floor',         lat: 37.7732, lng: -122.4208, sensitivity: 'public',     authorizedHoursStart: 16, authorizedHoursEnd: 23 },
-      { label: 'Stage Barrier',    lat: 37.7733, lng: -122.4207, sensitivity: 'controlled', authorizedHoursStart: 16, authorizedHoursEnd: 23 },
-      { label: 'VIP / Backstage',  lat: 37.7734, lng: -122.4205, sensitivity: 'restricted', authorizedHoursStart: 14, authorizedHoursEnd: 23 },
-      { label: 'Parking',          lat: 37.7726, lng: -122.4215, sensitivity: 'public',     authorizedHoursStart: 14, authorizedHoursEnd: 24 },
-    ],
-    agents: [
-      { type: 'guard', id: 'g-ar-001', name: 'Officer Williams', zoneIndex: 0, dutyStatus: 'patrolling' },
-      { type: 'guard', id: 'g-ar-002', name: 'Officer Patel',    zoneIndex: 2, dutyStatus: 'patrolling' },
-      { type: 'robot', id: 'r-ar-001', name: 'Robot Beta',       zoneIndex: 4 },
-    ],
-  },
+  // --- inactive shifts (uncomment to enable) ---
+  // {
+  //   id: 'shift-riverside',
+  //   context: {
+  //     shiftId: 'shift-riverside',
+  //     guardType: 'patrol',
+  //     venueType: 'construction_site',
+  //     venueName: 'Riverside Development',
+  //     expectedActivity: 'none',
+  //   },
+  //   zones: [
+  //     { label: 'Site Office',        lat: 37.7760, lng: -122.4180, sensitivity: 'controlled', authorizedHoursStart: 7, authorizedHoursEnd: 18 },
+  //     { label: 'Equipment Storage',  lat: 37.7762, lng: -122.4178, sensitivity: 'restricted', authorizedHoursStart: 7, authorizedHoursEnd: 18 },
+  //     { label: 'Active Build Zone',  lat: 37.7764, lng: -122.4175, sensitivity: 'restricted', authorizedHoursStart: 7, authorizedHoursEnd: 18 },
+  //     { label: 'North Perimeter',    lat: 37.7768, lng: -122.4180, sensitivity: 'controlled', authorizedHoursStart: 0, authorizedHoursEnd: 24 },
+  //     { label: 'South Perimeter',    lat: 37.7755, lng: -122.4180, sensitivity: 'controlled', authorizedHoursStart: 0, authorizedHoursEnd: 24 },
+  //   ],
+  //   agents: [
+  //     { type: 'guard', id: 'g-rv-001', name: 'Officer Chen',    zoneIndex: 3, dutyStatus: 'patrolling' },
+  //     { type: 'robot', id: 'r-rv-001', name: 'Robot Alpha',     zoneIndex: 4 },
+  //   ],
+  // },
+  // {
+  //   id: 'shift-arena',
+  //   context: {
+  //     shiftId: 'shift-arena',
+  //     guardType: 'event',
+  //     venueType: 'concert',
+  //     venueName: 'Arena North',
+  //     expectedActivity: 'high',
+  //   },
+  //   zones: [
+  //     { label: 'Entry Gates',      lat: 37.7730, lng: -122.4210, sensitivity: 'public',     authorizedHoursStart: 16, authorizedHoursEnd: 23 },
+  //     { label: 'GA Floor',         lat: 37.7732, lng: -122.4208, sensitivity: 'public',     authorizedHoursStart: 16, authorizedHoursEnd: 23 },
+  //     { label: 'Stage Barrier',    lat: 37.7733, lng: -122.4207, sensitivity: 'controlled', authorizedHoursStart: 16, authorizedHoursEnd: 23 },
+  //     { label: 'VIP / Backstage',  lat: 37.7734, lng: -122.4205, sensitivity: 'restricted', authorizedHoursStart: 14, authorizedHoursEnd: 23 },
+  //     { label: 'Parking',          lat: 37.7726, lng: -122.4215, sensitivity: 'public',     authorizedHoursStart: 14, authorizedHoursEnd: 24 },
+  //   ],
+  //   agents: [
+  //     { type: 'guard', id: 'g-ar-001', name: 'Officer Williams', zoneIndex: 0, dutyStatus: 'patrolling' },
+  //     { type: 'guard', id: 'g-ar-002', name: 'Officer Patel',    zoneIndex: 2, dutyStatus: 'patrolling' },
+  //     { type: 'robot', id: 'r-ar-001', name: 'Robot Beta',       zoneIndex: 4 },
+  //   ],
+  // },
 ];
 
 // --- helpers ---

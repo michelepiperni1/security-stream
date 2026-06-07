@@ -1,7 +1,10 @@
+import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { simulator, start } from './simulator.js';
 import type { AgentReport } from './simulator.js';
+import { saveReport, saveDecision } from './db.js';
+import { analyzeReport } from './agent.js';
 
 const app = Fastify({ logger: true });
 
@@ -11,11 +14,22 @@ await app.register(cors, { origin: true });
 
 const clients = new Set<{ write: (data: string) => void }>();
 
+const broadcast = (event: string, data: unknown) => {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const client of clients) client.write(payload);
+};
+
 simulator.on('report', (report: AgentReport) => {
-  const payload = `data: ${JSON.stringify(report)}\n\n`;
-  for (const client of clients) {
-    client.write(payload);
-  }
+  saveReport(report);
+  broadcast('report', report);
+
+  analyzeReport(report)
+    .then(decision => {
+      if (!decision) return;
+      saveDecision(decision);
+      broadcast('decision', decision);
+    })
+    .catch(err => app.log.error({ err }, 'Agent analysis failed'));
 });
 
 app.get('/events', (req, reply) => {

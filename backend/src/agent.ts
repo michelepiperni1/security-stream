@@ -1,10 +1,8 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { randomUUID } from 'crypto';
 import type { AgentReport } from './simulator.js';
 import type { Decision } from './db.js';
 import { getFalsePositiveRate } from './db.js';
-
-const client = new Anthropic();
+import { getProvider } from './providers/index.js';
 
 const SYSTEM_PROMPT = `You are an AI dispatch coordinator for a physical security operations center. You receive real-time sensor reports from security guards (via their phones) and autonomous patrol robots across multiple venues and shift types.
 
@@ -92,48 +90,16 @@ Historical context:
 
 Analyze this report and return your dispatch decision.`;
 
-  const response = await client.messages.create({
-    model: 'claude-opus-4-8',
-    max_tokens: 4000,
-    thinking: { type: 'adaptive' },
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: userMessage }],
-    output_config: {
-      format: {
-        type: 'json_schema',
-        schema: {
-          type: 'object',
-          properties: {
-            priority:   { type: 'integer' },
-            action:     { type: 'string', enum: ['dispatch_guard', 'dispatch_robot', 'escalate', 'monitor', 'dismiss'] },
-            reasoning:  { type: 'string' },
-            confidence: { type: 'number' },
-          },
-          required: ['priority', 'action', 'reasoning', 'confidence'],
-          additionalProperties: false,
-        },
-      },
-    },
-  });
-
-  let thinking: string | undefined;
-  let parsed: { priority: number; action: string; reasoning: string; confidence: number } | undefined;
-
-  for (const block of response.content) {
-    if (block.type === 'thinking') thinking = block.thinking;
-    else if (block.type === 'text') parsed = JSON.parse(block.text);
-  }
-
-  if (!parsed) return null;
+  const result = await getProvider().analyze(SYSTEM_PROMPT, userMessage);
 
   return {
     id: randomUUID(),
     reportId: report.id,
     timestamp: new Date().toISOString(),
-    priority: parsed.priority,
-    action: parsed.action as Decision['action'],
-    reasoning: parsed.reasoning,
-    confidence: parsed.confidence,
-    thinking,
+    priority: result.priority,
+    action: result.action as Decision['action'],
+    reasoning: result.reasoning,
+    confidence: result.confidence,
+    thinking: result.thinking,
   };
 };

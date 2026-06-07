@@ -16,13 +16,21 @@ interface ShiftContext {
   expectedActivity: 'none' | 'low' | 'normal' | 'high' | 'peak';
 }
 
-interface Location {
+interface Zone {
   label: string;
   lat: number;
   lng: number;
   sensitivity: 'public' | 'controlled' | 'restricted';
   authorizedHoursStart: number;
   authorizedHoursEnd: number;
+}
+
+// what goes in reports — no hour fields so the agent can't second-guess outOfHours
+interface ReportLocation {
+  label: string;
+  lat: number;
+  lng: number;
+  sensitivity: 'public' | 'controlled' | 'restricted';
 }
 
 interface GuardSensors {
@@ -46,7 +54,7 @@ export interface GuardReport {
   agentType: 'guard';
   agentId: string;
   agentName: string;
-  location: Location;
+  location: ReportLocation;
   outOfHours: boolean;
   sensors: GuardSensors;
   dutyStatus: 'patrolling' | 'responding' | 'escorting' | 'on_break';
@@ -60,7 +68,7 @@ export interface RobotReport {
   agentType: 'robot';
   agentId: string;
   agentName: string;
-  location: Location;
+  location: ReportLocation;
   outOfHours: boolean;
   sensors: RobotSensors;
   patrolStatus: 'patrolling' | 'investigating' | 'docked' | 'error';
@@ -91,7 +99,7 @@ type Agent = GuardAgent | RobotAgent;
 interface Shift {
   id: string;
   context: ShiftContext;
-  zones: Location[];
+  zones: Zone[];
   agents: Agent[];
 }
 
@@ -177,7 +185,7 @@ const randInt = (min: number, max: number): number =>
 const jitter = (n: number, delta: number): number =>
   Number((n + (Math.random() - 0.5) * delta).toFixed(6));
 
-const isOutOfHours = (zone: Location): boolean => {
+const isOutOfHours = (zone: Zone): boolean => {
   const hour = new Date().getHours();
   if (zone.authorizedHoursStart <= zone.authorizedHoursEnd) {
     return hour < zone.authorizedHoursStart || hour >= zone.authorizedHoursEnd;
@@ -198,7 +206,7 @@ const generateGuardReport = (agent: GuardAgent, shift: Shift): GuardReport => {
     agentType: 'guard',
     agentId: agent.id,
     agentName: agent.name,
-    location: { ...zone, lat: jitter(zone.lat, 0.0003), lng: jitter(zone.lng, 0.0003) },
+    location: { label: zone.label, sensitivity: zone.sensitivity, lat: jitter(zone.lat, 0.0003), lng: jitter(zone.lng, 0.0003) },
     outOfHours: isOutOfHours(zone),
     sensors: {
       movement: isAlert
@@ -226,7 +234,7 @@ const generateRobotReport = (agent: RobotAgent, shift: Shift): RobotReport => {
     agentType: 'robot',
     agentId: agent.id,
     agentName: agent.name,
-    location: zone,
+    location: { label: zone.label, sensitivity: zone.sensitivity, lat: zone.lat, lng: zone.lng },
     outOfHours: isOutOfHours(zone),
     sensors: {
       personDetected: isAlert,

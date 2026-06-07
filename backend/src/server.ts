@@ -3,7 +3,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { simulator, start } from './simulator.js';
 import type { AgentReport } from './simulator.js';
-import { saveReport, saveDecision } from './db.js';
+import { saveReport, saveDecision, getRecentHistory } from './db.js';
 import { analyzeReport } from './agent.js';
 
 const app = Fastify({ logger: true });
@@ -33,6 +33,8 @@ simulator.on('report', (report: AgentReport) => {
 });
 
 app.get('/events', (req, reply) => {
+  const origin = req.headers.origin ?? '*';
+  reply.raw.setHeader('Access-Control-Allow-Origin', origin);
   reply.raw.setHeader('Content-Type', 'text/event-stream');
   reply.raw.setHeader('Cache-Control', 'no-cache');
   reply.raw.setHeader('Connection', 'keep-alive');
@@ -43,6 +45,10 @@ app.get('/events', (req, reply) => {
 
   req.raw.on('close', () => clients.delete(client));
 });
+
+// --- history ---
+
+app.get('/history', () => getRecentHistory(100));
 
 // --- health ---
 

@@ -138,3 +138,44 @@ export const getRecentReports = (limit = 50): AgentReport[] => {
   ).all({ limit }) as { raw: string }[];
   return rows.map(r => JSON.parse(r.raw) as AgentReport);
 };
+
+export const getRecentHistory = (limit = 50): { report: AgentReport; decision: Decision | null }[] => {
+  const rows = db.prepare(`
+    SELECT r.raw,
+           d.id         AS d_id,
+           d.report_id  AS d_reportId,
+           d.timestamp  AS d_timestamp,
+           d.priority   AS d_priority,
+           d.action     AS d_action,
+           d.reasoning  AS d_reasoning,
+           d.confidence AS d_confidence
+    FROM reports r
+    LEFT JOIN decisions d ON d.report_id = r.id
+    ORDER BY r.timestamp DESC
+    LIMIT :limit
+  `).all({ limit }) as Array<{
+    raw: string;
+    d_id: string | null;
+    d_reportId: string | null;
+    d_timestamp: string | null;
+    d_priority: number | null;
+    d_action: string | null;
+    d_reasoning: string | null;
+    d_confidence: number | null;
+  }>;
+
+  return rows.map(row => ({
+    report: JSON.parse(row.raw) as AgentReport,
+    decision: row.d_id
+      ? {
+          id: row.d_id,
+          reportId: row.d_reportId!,
+          timestamp: row.d_timestamp!,
+          priority: row.d_priority!,
+          action: row.d_action as Decision['action'],
+          reasoning: row.d_reasoning!,
+          confidence: row.d_confidence!,
+        }
+      : null,
+  }));
+};

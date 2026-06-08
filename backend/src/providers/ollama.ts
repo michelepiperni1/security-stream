@@ -6,9 +6,10 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'llama3.2';
 const JSON_REMINDER = `
 Respond with ONLY a JSON object — no markdown, no explanation. Schema:
 {
+  "thinking": <string, step-by-step reasoning before reaching your conclusion>,
   "priority": <integer 1-5>,
   "action": <"dispatch_guard" | "dispatch_robot" | "escalate" | "monitor" | "dismiss">,
-  "reasoning": <string, 2-3 sentences>,
+  "reasoning": <string, 2-3 sentences summarising your decision>,
   "confidence": <float 0.0-1.0>
 }`;
 
@@ -42,6 +43,7 @@ export class OllamaProvider implements LLMProvider {
     if (!content) throw new Error('Ollama returned empty content');
 
     const parsed = JSON.parse(content) as {
+      thinking?: string;
       priority: number;
       action: string;
       reasoning: string;
@@ -49,6 +51,7 @@ export class OllamaProvider implements LLMProvider {
     };
 
     return {
+      thinking: parsed.thinking,
       priority: parsed.priority,
       action: parsed.action as LLMDecision['action'],
       reasoning: parsed.reasoning,

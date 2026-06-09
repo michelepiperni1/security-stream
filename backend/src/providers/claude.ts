@@ -18,12 +18,14 @@ export class ClaudeProvider implements LLMProvider {
             type: 'object',
             properties: {
               priority:   { type: 'integer' },
-              action:     { type: 'string', enum: ['dispatch_guard', 'dispatch_robot', 'escalate', 'monitor', 'dismiss'] },
-              reasoning:  { type: 'string' },
-              confidence: { type: 'number' },
-              memo:       { type: 'string' },
-              shift_memo: { type: 'string' },
-              venue_note: { type: 'string' },
+              action:           { type: 'string', enum: ['message_guard', 'broadcast_alert', 'call_police', 'dispatch_robot', 'investigate', 'monitor', 'dismiss'] },
+              reasoning:        { type: 'string' },
+              confidence:       { type: 'number' },
+              memo:             { type: 'string' },
+              shift_memo:       { type: 'string' },
+              venue_note:       { type: 'string' },
+              dispatch_guard_id: { type: 'string' },
+              dispatch_message:  { type: 'string' },
             },
             required: ['priority', 'action', 'reasoning', 'confidence', 'memo', 'shift_memo'],
             additionalProperties: false,
@@ -33,7 +35,7 @@ export class ClaudeProvider implements LLMProvider {
     });
 
     let thinking: string | undefined;
-    let parsed: { priority: number; action: string; reasoning: string; confidence: number; memo: string; shift_memo: string; venue_note?: string } | undefined;
+    let parsed: { priority: number; action: string; reasoning: string; confidence: number; memo: string; shift_memo: string; venue_note?: string; dispatch_guard_id?: string; dispatch_message?: string } | undefined;
 
     for (const block of response.content) {
       if (block.type === 'thinking') thinking = block.thinking;
@@ -44,13 +46,15 @@ export class ClaudeProvider implements LLMProvider {
 
     return {
       priority: parsed.priority,
-      action: parsed.action as LLMDecision['action'],
+      action: parsed.action,
       reasoning: parsed.reasoning,
       confidence: parsed.confidence,
       memo: parsed.memo,
       shiftMemo: parsed.shift_memo,
       venueNote: parsed.venue_note,
       thinking,
+      dispatchGuardId: parsed.dispatch_guard_id,
+      dispatchMessage: parsed.dispatch_message,
     };
   }
 }

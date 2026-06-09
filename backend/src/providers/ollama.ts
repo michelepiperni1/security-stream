@@ -8,12 +8,14 @@ Respond with ONLY a JSON object — no markdown, no explanation. Schema:
 {
   "thinking": <string, step-by-step reasoning before reaching your conclusion>,
   "priority": <integer 1-5>,
-  "action": <"dispatch_guard" | "dispatch_robot" | "escalate" | "monitor" | "dismiss">,
+  "action": <"message_guard" | "broadcast_alert" | "call_police" | "dispatch_robot" | "investigate" | "monitor" | "dismiss">,
   "reasoning": <string, 2-3 sentences summarising your decision>,
   "confidence": <float 0.0-1.0>,
   "memo": <string, 2-4 sentence running assessment of this guard for the shift>,
   "shift_memo": <string, 1-2 sentence snapshot of overall shift state across all guards>,
-  "venue_note": <string or null, 1 sentence about a noteworthy incident for venue history — only include if priority >= 4, otherwise null>
+  "venue_note": <string or null, 1 sentence about a noteworthy incident for venue history — only include if priority >= 4, otherwise null>,
+  "dispatch_guard_id": <string or null, the ID of the guard to message when action is "message_guard">,
+  "dispatch_message": <string or null, the message to send to the guard(s) when action is "message_guard" or "broadcast_alert">
 }`;
 
 export class OllamaProvider implements LLMProvider {
@@ -54,17 +56,21 @@ export class OllamaProvider implements LLMProvider {
       memo?: string;
       shift_memo?: string;
       venue_note?: string;
+      dispatch_guard_id?: string;
+      dispatch_message?: string;
     };
 
     return {
       thinking: parsed.thinking,
       priority: parsed.priority,
-      action: parsed.action as LLMDecision['action'],
+      action: parsed.action,
       reasoning: parsed.reasoning,
       confidence: parsed.confidence,
       memo: parsed.memo,
       shiftMemo: parsed.shift_memo,
       venueNote: parsed.venue_note ?? undefined,
+      dispatchGuardId: parsed.dispatch_guard_id ?? undefined,
+      dispatchMessage: parsed.dispatch_message ?? undefined,
     };
   }
 }

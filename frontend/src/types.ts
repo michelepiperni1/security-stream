@@ -82,10 +82,20 @@ export interface Decision {
   eventId: string;
   timestamp: string;
   priority: number;
-  action: 'dispatch_guard' | 'dispatch_robot' | 'escalate' | 'monitor' | 'dismiss';
+  action: string;
   reasoning: string;
   confidence: number;
   thinking?: string;
+}
+
+export interface AgentAction {
+  id: string;
+  decisionId: string;
+  timestamp: string;
+  type: string;
+  guardId?: string;
+  guardName?: string;
+  content?: string;
 }
 
 export interface GuardMemo {
@@ -106,4 +116,14 @@ export interface VenueNote {
   locationId: string;
   content: string;
   occurredAt: string;
+}
+
+export interface Incident {
+  id: string;
+  agentActionId: string;
+  locationId: string;
+  timestamp: string;
+  status: 'open' | 'resolved' | 'false_alarm' | 'escalated';
+  outcomeNotes?: string;
+  resolvedAt?: string;
 }

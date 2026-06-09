@@ -1,12 +1,14 @@
 export interface LLMDecision {
   priority: number;
-  action: 'dispatch_guard' | 'dispatch_robot' | 'escalate' | 'monitor' | 'dismiss';
+  action: string;
   reasoning: string;
   confidence: number;
   memo?: string;
   shiftMemo?: string;
   venueNote?: string;
   thinking?: string;
+  dispatchGuardId?: string;
+  dispatchMessage?: string;
 }
 
 export interface LLMProvider {

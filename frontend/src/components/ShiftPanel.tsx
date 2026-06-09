@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { ChevronDown, ChevronUp, MapPin, Heart, BrainCircuit, History } from 'lucide-react';
-import type { ShiftInfo, SecurityEvent, GuardMessage, GuardMemo, ShiftMemo, VenueNote } from '@/types';
+import { ChevronDown, ChevronUp, MapPin, Heart, BrainCircuit, History, Send, Radio, PhoneCall, Bot, Zap } from 'lucide-react';
+import type { ShiftInfo, SecurityEvent, GuardMessage, GuardMemo, ShiftMemo, VenueNote, AgentAction, Incident } from '@/types';
 import { buildGuardStatusMap, getAlertLevel, ALERT_DOT, ALERT_HR_COLOR } from '@/lib/guardAlertLevel';
 
 interface Props {
@@ -10,9 +10,27 @@ interface Props {
   memos: Map<string, GuardMemo>;
   shiftMemo: ShiftMemo | null;
   venueNotes: VenueNote[];
+  agentActions: AgentAction[];
+  incidents: Map<string, Incident>;
   selectedGuardId: string | null;
   onSelectGuard: (id: string | null) => void;
 }
+
+const ACTION_ICON: Record<string, React.ReactNode> = {
+  message_guard:   <Send      className="h-3 w-3 shrink-0 text-teal-400" />,
+  broadcast_alert: <Radio     className="h-3 w-3 shrink-0 text-amber-400" />,
+  call_police:     <PhoneCall className="h-3 w-3 shrink-0 text-red-400" />,
+  dispatch_robot:  <Bot       className="h-3 w-3 shrink-0 text-slate-400" />,
+  investigate:     <Zap       className="h-3 w-3 shrink-0 text-blue-400" />,
+};
+
+const ACTION_LABEL: Record<string, string> = {
+  message_guard:   'text-teal-300',
+  broadcast_alert: 'text-amber-300',
+  call_police:     'text-red-300',
+  dispatch_robot:  'text-slate-400',
+  investigate:     'text-blue-300',
+};
 
 const MSG_COLOR: Record<GuardMessage['messageType'], string> = {
   status_update: 'text-slate-300',
@@ -54,22 +72,55 @@ const fmtDate = (ts: string): string => {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + fmtTime(ts);
 };
 
-const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, selectedGuardId, onSelectGuard }: Props) => {
+const INCIDENT_DOT: Record<Incident['status'], string> = {
+  open:        'bg-orange-400',
+  resolved:    'bg-green-400',
+  false_alarm: 'bg-red-400',
+  escalated:   'bg-amber-400',
+};
+
+const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, agentActions, incidents, selectedGuardId, onSelectGuard }: Props) => {
   const [goalExpanded, setGoalExpanded] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [dispatchExpanded, setDispatchExpanded] = useState(false);
+  const [resolvingActionId, setResolvingActionId] = useState<string | null>(null);
+  const [resolveNotes, setResolveNotes] = useState('');
+
+  const resolveIncident = async (incidentId: string, status: string) => {
+    await fetch(`http://localhost:3000/incidents/${incidentId}/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, notes: resolveNotes.trim() || undefined }),
+    }).catch(() => {});
+    setResolvingActionId(null);
+    setResolveNotes('');
+  };
 
   const guardStatus = useMemo(
     () => buildGuardStatusMap(shift?.guards.map(g => g.id) ?? [], events),
     [shift, events],
   );
 
-  const messages = useMemo(
+  const guardMessages = useMemo(
     () =>
       events
         .filter((e): e is GuardMessage => e.type === 'message')
         .filter(e => selectedGuardId === null || e.guardId === selectedGuardId),
     [events, selectedGuardId],
   );
+
+  type MessageFeedItem =
+    | { kind: 'guard'; msg: GuardMessage; ts: string }
+    | { kind: 'ai'; action: AgentAction; ts: string };
+
+  const messages = useMemo((): MessageFeedItem[] => {
+    const guardItems: MessageFeedItem[] = guardMessages.map(m => ({ kind: 'guard', msg: m, ts: m.timestamp }));
+    const aiItems: MessageFeedItem[] = agentActions
+      .filter(a => a.type === 'message_guard' || a.type === 'broadcast_alert')
+      .filter(a => selectedGuardId === null || a.guardId === selectedGuardId || !a.guardId)
+      .map(a => ({ kind: 'ai', action: a, ts: a.timestamp }));
+    return [...guardItems, ...aiItems].sort((a, b) => b.ts.localeCompare(a.ts));
+  }, [guardMessages, agentActions, selectedGuardId]);
 
   if (!shift) {
     return (
@@ -82,6 +133,11 @@ const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, selectedGuard
   const selectedGuard = shift.guards.find(g => g.id === selectedGuardId) ?? null;
   const selectedMemo = selectedGuardId ? memos.get(selectedGuardId) ?? null : null;
   const selectedLevel = selectedGuardId ? getAlertLevel(guardStatus.get(selectedGuardId)!) : 'normal';
+
+  const filteredActions = agentActions.filter(a =>
+    selectedGuardId === null || a.guardId === selectedGuardId || !a.guardId
+  );
+  const visibleActions = dispatchExpanded ? filteredActions : filteredActions.slice(0, 5);
 
   return (
     <div className="flex flex-col h-full min-h-0 border-l border-slate-700/50 bg-slate-900">
@@ -148,6 +204,83 @@ const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, selectedGuard
             <span className="text-[10px] text-slate-600">{fmtRelative(shiftMemo.updatedAt)}</span>
           </div>
           <p className="text-[11px] text-slate-300 leading-relaxed">{shiftMemo.content}</p>
+        </div>
+      )}
+
+      {/* Dispatch Log */}
+      {filteredActions.length > 0 && (
+        <div className="px-4 pt-2.5 pb-2.5 border-b border-slate-700/50 shrink-0">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+              <Zap className="h-3 w-3" />
+              Dispatch Log
+            </span>
+            <span className="text-[10px] text-slate-600">{filteredActions.length}</span>
+          </div>
+          <div className="space-y-1.5">
+            {visibleActions.map(action => {
+              const incident = incidents.get(action.id);
+              const isResolving = resolvingActionId === action.id;
+              return (
+                <div key={action.id}>
+                  <div className="flex items-start gap-2 text-[10px]">
+                    <span className="text-slate-600 font-mono shrink-0 pt-px">{fmtTime(action.timestamp)}</span>
+                    <span className="shrink-0 pt-px">{ACTION_ICON[action.type] ?? <Zap className="h-3 w-3 shrink-0 text-slate-500" />}</span>
+                    <div className="min-w-0 flex-1">
+                      {action.guardName && (
+                        <span className={`font-medium mr-1 ${ACTION_LABEL[action.type] ?? 'text-slate-400'}`}>
+                          {action.type === 'broadcast_alert' ? 'All guards' : action.guardName}
+                        </span>
+                      )}
+                      {!action.guardName && action.type === 'call_police' && (
+                        <span className="font-medium mr-1 text-red-300">Police</span>
+                      )}
+                      {action.content && (
+                        <span className="text-slate-400 leading-relaxed">&ldquo;{action.content}&rdquo;</span>
+                      )}
+                    </div>
+                    {incident && (
+                      <button
+                        title={incident.status === 'open' ? 'Mark outcome' : incident.status.replace('_', ' ')}
+                        onClick={() => {
+                          if (incident.status !== 'open') return;
+                          setResolvingActionId(isResolving ? null : action.id);
+                          setResolveNotes('');
+                        }}
+                        className={`h-2 w-2 rounded-full shrink-0 mt-1 transition-opacity ${INCIDENT_DOT[incident.status]} ${incident.status === 'open' ? 'cursor-pointer hover:opacity-70' : 'cursor-default opacity-80'}`}
+                      />
+                    )}
+                  </div>
+                  {isResolving && incident && (
+                    <div className="mt-1.5 ml-10 p-2 rounded bg-slate-800 border border-slate-700/60 space-y-1.5">
+                      <div className="flex gap-1.5">
+                        <button onClick={() => resolveIncident(incident.id, 'resolved')} className="flex-1 text-[10px] py-1 rounded bg-green-900/40 hover:bg-green-900/70 text-green-300 border border-green-800/50 transition-colors cursor-pointer">✓ Resolved</button>
+                        <button onClick={() => resolveIncident(incident.id, 'false_alarm')} className="flex-1 text-[10px] py-1 rounded bg-slate-700/40 hover:bg-slate-700/70 text-slate-300 border border-slate-600/50 transition-colors cursor-pointer">✗ False alarm</button>
+                        <button onClick={() => resolveIncident(incident.id, 'escalated')} className="flex-1 text-[10px] py-1 rounded bg-amber-900/40 hover:bg-amber-900/70 text-amber-300 border border-amber-800/50 transition-colors cursor-pointer">↑ Escalated</button>
+                      </div>
+                      <input
+                        type="text"
+                        value={resolveNotes}
+                        onChange={e => setResolveNotes(e.target.value)}
+                        placeholder="Notes (optional)"
+                        className="w-full text-[10px] bg-slate-900 border border-slate-700/60 rounded px-2 py-1 text-slate-300 placeholder-slate-600 focus:outline-none focus:border-slate-500"
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {filteredActions.length > 5 && (
+            <button
+              onClick={() => setDispatchExpanded(v => !v)}
+              className="flex items-center gap-0.5 mt-1.5 text-[10px] text-slate-600 hover:text-slate-400 transition-colors cursor-pointer"
+            >
+              {dispatchExpanded
+                ? <><ChevronUp className="h-3 w-3" />show less</>
+                : <><ChevronDown className="h-3 w-3" />{filteredActions.length - 5} more</>}
+            </button>
+          )}
         </div>
       )}
 
@@ -232,6 +365,7 @@ const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, selectedGuard
           {messages.length > 0 && (
             <span className="text-[10px] text-slate-600">{messages.length}</span>
           )}
+
         </div>
       </div>
 
@@ -243,17 +377,32 @@ const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, selectedGuard
               {selectedGuardId ? 'No messages from this guard' : 'No messages yet'}
             </p>
           )}
-          {messages.map(msg => (
-            <div key={msg.id} className="text-[11px] leading-relaxed">
-              <span className="font-mono text-slate-600 mr-1.5">{fmtTime(msg.timestamp)}</span>
-              {selectedGuardId === null && (
-                <span className="font-medium text-slate-400 mr-1">
-                  {msg.guardName.split(' ')[0]}
-                </span>
-              )}
-              <span className={MSG_COLOR[msg.messageType]}>{msg.content}</span>
-            </div>
-          ))}
+          {messages.map(item => {
+            if (item.kind === 'guard') {
+              const msg = item.msg;
+              return (
+                <div key={msg.id} className="text-[11px] leading-relaxed">
+                  <span className="font-mono text-slate-600 mr-1.5">{fmtTime(msg.timestamp)}</span>
+                  {selectedGuardId === null && (
+                    <span className="font-medium text-slate-400 mr-1">
+                      {msg.guardName.split(' ')[0]}
+                    </span>
+                  )}
+                  <span className={MSG_COLOR[msg.messageType]}>{msg.content}</span>
+                </div>
+              );
+            }
+            const a = item.action;
+            const label = a.type === 'broadcast_alert' ? 'All guards' : (a.guardName?.split(' ')[0] ?? 'Guard');
+            return (
+              <div key={a.id} className="text-[11px] leading-relaxed border-l-2 border-teal-700/50 pl-2 -ml-2">
+                <span className="font-mono text-slate-600 mr-1.5">{fmtTime(a.timestamp)}</span>
+                <Send className="h-2.5 w-2.5 inline text-teal-500 mr-1 -mt-px" />
+                <span className="font-medium text-teal-400 mr-1">Dispatcher → {label}</span>
+                <span className="text-slate-300">&ldquo;{a.content}&rdquo;</span>
+              </div>
+            );
+          })}
         </div>
       </ScrollArea>
     </div>

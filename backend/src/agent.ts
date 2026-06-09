@@ -14,6 +14,7 @@ export interface GuardContext {
   currentMemo: string | null;
   shiftMemo: string | null;
   venueHistory: string[];
+  availableGuards: Array<{ id: string; name: string; role: string; lastKnownZone: string | null }>;
 }
 
 const SYSTEM_PROMPT = `You are an AI dispatch coordinator for a physical security operations center. You receive real-time event streams from security guards across active shifts.
@@ -46,17 +47,20 @@ Running + elevated HR at a nightclub bouncer during peak hours is very different
 
 ## Event types and how to read them
 - Wearable threshold crossing: assess severity based on HR level, movement type, and how long it's been elevated (use recentWearable array). A single elevated reading may be noise; sustained elevation is more significant.
-- message/request_backup: guard is explicitly asking for help — treat as high priority unless context clearly indicates false alarm
-- message/suspicious_activity: guard has flagged something — investigate based on venue and zone
-- message/status_update or all_clear: routine, usually results in dismiss or monitor
-- panic: highest urgency signal — almost always warrants dispatch_guard or escalate
+- Messages: always read the actual content — it is the primary signal. The message type (status_update, request_backup, etc.) is a rough classification that may not match the content. A guard who sends a status_update saying "crowd surge at main stage" is reporting an active incident, not a routine check-in. Never dismiss or downgrade a message because of its type; judge it by what it says.
+- panic: highest urgency signal — almost always warrants a direct response.
+- Wearable data absence: if a guard reports an incident verbally, the absence of elevated wearable readings does NOT invalidate the report. Guards notice things before their body reacts. Treat the message as the authoritative source; wearable data is corroborating context only.
 
 ## Available actions
-- dispatch_guard: send a human guard to investigate or intervene
-- dispatch_robot: send a robot to investigate first — lower escalation, preserves human resources
-- escalate: page the supervisor — for critical or ambiguous high-stakes situations
-- monitor: flag for attention but no immediate physical response needed
-- dismiss: no action required, consistent with normal activity for this venue/time
+Choose the most appropriate action. For message_guard and broadcast_alert you MUST include dispatch_message and (for message_guard) dispatch_guard_id — the message is sent directly and in real time.
+
+- message_guard: send a direct operational message to a specific guard. Set dispatch_guard_id to the guard's ID and dispatch_message to what you want to tell them. Use this to redirect a guard, warn them, request they investigate, or coordinate a response.
+- broadcast_alert: send an alert message to ALL guards on this shift simultaneously. Set dispatch_message to the alert content. Use for venue-wide threats, crowd advisories, or general escalations.
+- call_police: escalate to law enforcement. Your reasoning will be used as the call details. Reserve for serious criminal activity, violence, or life-threatening situations.
+- dispatch_robot: deploy a robot to investigate — lower escalation than sending a human guard.
+- investigate: flag for investigation by available personnel — no specific guard redirected.
+- monitor: flag for attention but no physical response needed.
+- dismiss: no action required — consistent with normal activity for this venue/time.
 
 ## Priority scale
 1 = informational
@@ -78,6 +82,8 @@ export interface DecisionWithThinking extends Decision {
   shiftMemo?: string;
   venueNote?: string;
   thinking?: string;
+  dispatchGuardId?: string;
+  dispatchMessage?: string;
 }
 
 export const analyzeEvent = async (
@@ -87,6 +93,12 @@ export const analyzeEvent = async (
   const profileLine = context.profile
     ? `${context.profile.name} | ${context.profile.gender} | ${context.profile.experienceYears} yrs experience | ${context.profile.armed ? 'armed' : 'unarmed'} | role: ${context.profile.role}`
     : 'unknown guard';
+
+  const guardsLine = context.availableGuards.length > 0
+    ? context.availableGuards.map(g =>
+        `- ID: ${g.id} | ${g.name} | ${g.role.replace(/_/g, ' ')} | last seen: ${g.lastKnownZone ?? 'unknown'}`
+      ).join('\n')
+    : 'No other guards available.';
 
   const userMessage = `Triggering event:
 ${JSON.stringify(event, null, 2)}
@@ -103,6 +115,9 @@ Guard context:
 Shift context:
 - Venue: ${context.venueName} (${context.venueType}, expected activity: ${context.expectedActivity})
 - Goal: ${context.shiftGoal}
+
+Guards available for dispatch (use their ID in dispatch_guard_id):
+${guardsLine}
 
 Your prior assessment of this guard (rewrite this in your response):
 ${context.currentMemo ?? 'No prior assessment yet.'}
@@ -124,12 +139,14 @@ Analyze this event, return your dispatch decision, rewrite your guard memo and s
     eventId: event.id,
     timestamp: new Date().toISOString(),
     priority: result.priority,
-    action: result.action as Decision['action'],
+    action: result.action,
     reasoning: result.reasoning,
     confidence: result.confidence,
     memo: result.memo,
     shiftMemo: result.shiftMemo,
     venueNote: result.venueNote,
     thinking: result.thinking,
+    dispatchGuardId: result.dispatchGuardId,
+    dispatchMessage: result.dispatchMessage,
   };
 };

@@ -1,11 +1,12 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import { simulator, start } from './simulator.js';
+import { simulator, start, pauseSimulator, resumeSimulator, isSimulatorPaused } from './simulator.js';
 import type { GpsEvent, WearableEvent, GuardMessage, PanicEvent, SecurityEvent } from './events.js';
 import { randomUUID } from 'crypto';
-import { saveEvent, saveDecision, saveGuardMemo, loadGuardMemos, saveShiftMemo, loadShiftMemo, appendVenueNote, loadRecentVenueNotes, getRecentHistory, seedIfEmpty, loadActiveShifts } from './db.js';
+import { saveEvent, saveDecision, saveGuardMemo, loadGuardMemos, saveShiftMemo, loadShiftMemo, appendVenueNote, loadRecentVenueNotes, saveAgentAction, loadRecentAgentActions, loadAgentAction, saveIncident, resolveIncident, loadIncident, loadRecentIncidents, getRecentHistory, seedIfEmpty, loadActiveShifts } from './db.js';
 import type { GuardProfile, LoadedShift } from './db.js';
+import { scenarios } from './seed.js';
 
 let loadedShifts: LoadedShift[] = [];
 import { analyzeEvent, type GuardContext } from './agent.js';
@@ -74,6 +75,16 @@ const getGuardState = (guardId: string): GuardState => {
 const dispatch = (event: SecurityEvent) => {
   const state = getGuardState(event.guardId);
   const sState = state.shiftId ? shiftState.get(state.shiftId) ?? null : null;
+
+  const availableGuards = [...guardState.entries()]
+    .filter(([id]) => id !== event.guardId)
+    .map(([id, gs]) => ({
+      id,
+      name: gs.profile?.name ?? id,
+      role: gs.profile?.role ?? 'unknown',
+      lastKnownZone: gs.lastGps?.location.label ?? null,
+    }));
+
   const context: GuardContext = {
     lastGps: state.lastGps,
     recentWearable: state.recentWearable,
@@ -85,6 +96,7 @@ const dispatch = (event: SecurityEvent) => {
     currentMemo: state.currentMemo,
     shiftMemo: sState?.shiftMemo ?? null,
     venueHistory: sState?.venueHistory ?? [],
+    availableGuards,
   };
 
   analyzeEvent(event, context)
@@ -114,6 +126,55 @@ const dispatch = (event: SecurityEvent) => {
         appendVenueNote(noteId, sState.locationId, decision.venueNote, now);
         sState.venueHistory = [decision.venueNote, ...sState.venueHistory].slice(0, 5);
         broadcast('venue_note', { id: noteId, locationId: sState.locationId, content: decision.venueNote, occurredAt: now });
+      }
+
+      // Execute real actions
+      const action = decision.action;
+      const locationId = sState?.locationId ?? '';
+      const createIncident = (agentActionId: string) => {
+        if (!locationId) return;
+        saveIncident({ id: randomUUID(), agentActionId, locationId, timestamp: now, status: 'open' });
+      };
+
+      if (action === 'message_guard' && decision.dispatchGuardId && decision.dispatchMessage) {
+        const targetState = guardState.get(decision.dispatchGuardId);
+        const agentAction = {
+          id: randomUUID(), decisionId: decision.id, timestamp: now,
+          type: 'message_guard',
+          guardId: decision.dispatchGuardId,
+          guardName: targetState?.profile?.name ?? decision.dispatchGuardId,
+          content: decision.dispatchMessage,
+        };
+        saveAgentAction(agentAction);
+        createIncident(agentAction.id);
+        broadcast('agent_action', agentAction);
+      } else if (action === 'broadcast_alert' && decision.dispatchMessage) {
+        const agentAction = {
+          id: randomUUID(), decisionId: decision.id, timestamp: now,
+          type: 'broadcast_alert',
+          content: decision.dispatchMessage,
+        };
+        saveAgentAction(agentAction);
+        createIncident(agentAction.id);
+        broadcast('agent_action', agentAction);
+      } else if (action === 'call_police') {
+        const agentAction = {
+          id: randomUUID(), decisionId: decision.id, timestamp: now,
+          type: 'call_police',
+          content: decision.reasoning,
+        };
+        saveAgentAction(agentAction);
+        createIncident(agentAction.id);
+        broadcast('agent_action', agentAction);
+      } else if (action === 'dispatch_robot' || action === 'investigate') {
+        const agentAction = {
+          id: randomUUID(), decisionId: decision.id, timestamp: now,
+          type: action,
+          content: decision.reasoning,
+        };
+        saveAgentAction(agentAction);
+        createIncident(agentAction.id);
+        broadcast('agent_action', agentAction);
       }
     })
     .catch(err => app.log.error({ err }, 'Agent analysis failed'));
@@ -209,6 +270,101 @@ app.get('/venue-notes', () => {
   return notes;
 });
 
+// --- agent actions ---
+
+app.get('/agent-actions', () => loadRecentAgentActions(50));
+
+// --- incidents ---
+
+app.get('/incidents', () => loadRecentIncidents(50));
+
+app.post('/incidents/:id/resolve', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { status, notes } = req.body as { status: string; notes?: string };
+
+  const incident = loadIncident(id);
+  if (!incident) return reply.code(404).send({ error: 'Incident not found' });
+
+  const now = new Date().toISOString();
+  resolveIncident(id, status, notes ?? null, now);
+
+  const agentAction = loadAgentAction(incident.agentActionId);
+  const label = agentAction?.guardName ?? 'all guards';
+  const noteContent = `${agentAction?.type ?? 'action'} outcome (${label}): ${status}.${notes ? ' ' + notes : ''}`;
+  const noteId = randomUUID();
+  appendVenueNote(noteId, incident.locationId, noteContent, now);
+
+  for (const [shiftId, ss] of shiftState.entries()) {
+    if (ss.locationId === incident.locationId) {
+      ss.venueHistory = [noteContent, ...ss.venueHistory].slice(0, 5);
+      broadcast('venue_note', { id: noteId, locationId: incident.locationId, content: noteContent, occurredAt: now });
+      break;
+    }
+  }
+
+  broadcast('incident_update', { id, agentActionId: incident.agentActionId, status, resolvedAt: now });
+  return { ok: true };
+});
+
+// --- simulator control ---
+
+app.get('/sim/status', () => ({ paused: isSimulatorPaused() }));
+
+app.post('/sim/pause', () => { pauseSimulator(); return { paused: true }; });
+
+app.post('/sim/resume', () => { resumeSimulator(); return { paused: false }; });
+
+app.post('/sim/event', (req) => {
+  const body = req.body as Record<string, unknown>;
+  const { type, guardId } = body as { type: string; guardId: string };
+
+  const state = guardState.get(guardId);
+  if (!state) return { error: 'Unknown guard' };
+
+  const shift = loadedShifts.find(s => s.id === state.shiftId);
+  if (!shift) return { error: 'Guard has no active shift' };
+
+  const now = new Date().toISOString();
+  const id = randomUUID();
+  const name = state.profile?.name ?? guardId;
+
+  if (type === 'gps') {
+    const zone = shift.zones.find(z => z.id === (body.zoneId as string)) ?? shift.zones[0];
+    simulator.emit('gps', {
+      id, type: 'gps', timestamp: now,
+      guardId, guardName: name, shiftId: state.shiftId, venueName: state.venueName,
+      location: { label: zone.label, lat: zone.lat, lng: zone.lng, sensitivity: zone.sensitivity },
+      outOfHours: false,
+    });
+  } else if (type === 'wearable') {
+    simulator.emit('wearable', {
+      id, type: 'wearable', timestamp: now,
+      guardId, guardName: name, shiftId: state.shiftId, venueName: state.venueName,
+      heartRateBpm: body.heartRateBpm as number,
+      movement: body.movement as WearableEvent['movement'],
+      batteryPct: 100,
+    });
+  } else if (type === 'message') {
+    simulator.emit('message', {
+      id, type: 'message', timestamp: now,
+      guardId, guardName: name, shiftId: state.shiftId, venueName: state.venueName,
+      content: body.content as string,
+      messageType: body.messageType as GuardMessage['messageType'],
+    });
+  } else if (type === 'panic') {
+    const loc = state.lastGps?.location ?? { label: shift.zones[0].label, lat: shift.zones[0].lat, lng: shift.zones[0].lng };
+    simulator.emit('panic', {
+      id, type: 'panic', timestamp: now,
+      guardId, guardName: name, shiftId: state.shiftId, venueName: state.venueName,
+      location: loc,
+    });
+  } else {
+    return { error: 'Unknown event type' };
+  }
+
+  return { ok: true };
+});
+
 // --- health ---
 
 app.get('/health', () => ({ ok: true }));
@@ -216,9 +372,10 @@ app.get('/health', () => ({ ok: true }));
 // --- boot ---
 
 await app.listen({ port: 3000 });
-console.log('Server running on http://localhost:3000');
+const scenarioName = process.env.SCENARIO ?? 'berghain';
+console.log(`Server running on http://localhost:3000 [scenario: ${scenarioName}]`);
 
-seedIfEmpty();
+seedIfEmpty(scenarios[scenarioName] ?? scenarios.berghain);
 loadedShifts = loadActiveShifts();
 
 for (const shift of loadedShifts) {

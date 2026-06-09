@@ -3,14 +3,13 @@ import { mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import type { SecurityEvent, GpsEvent, WearableEvent, GuardMessage, PanicEvent } from './events.js';
-import {
-  SEED_LOCATIONS, SEED_ZONES, SEED_GUARDS, SEED_SHIFTS, SEED_SHIFT_GUARDS,
-} from './seed.js';
+import type { ScenarioData } from './seed.js';
 
 const dataDir = join(dirname(fileURLToPath(import.meta.url)), '../data');
 mkdirSync(dataDir, { recursive: true });
 
-const db = new DatabaseSync(join(dataDir, 'security.db'));
+const scenarioName = process.env.SCENARIO ?? 'berghain';
+const db = new DatabaseSync(join(dataDir, `${scenarioName}.db`));
 
 db.exec(`
   -- Entity tables
@@ -128,6 +127,26 @@ db.exec(`
     content     TEXT NOT NULL,
     occurred_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS agent_actions (
+    id          TEXT PRIMARY KEY,
+    decision_id TEXT NOT NULL,
+    timestamp   TEXT NOT NULL,
+    type        TEXT NOT NULL,
+    guard_id    TEXT,
+    guard_name  TEXT,
+    content     TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS incidents (
+    id              TEXT PRIMARY KEY,
+    agent_action_id TEXT NOT NULL,
+    location_id     TEXT NOT NULL,
+    timestamp       TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'open',
+    outcome_notes   TEXT,
+    resolved_at     TEXT
+  );
 `);
 
 // --- entity types ---
@@ -173,43 +192,67 @@ export interface Decision {
   eventId: string;
   timestamp: string;
   priority: number;
-  action: 'dispatch_guard' | 'dispatch_robot' | 'escalate' | 'monitor' | 'dismiss';
+  action: string;
   reasoning: string;
   confidence: number;
 }
 
+// --- agent action type ---
+
+export interface AgentAction {
+  id: string;
+  decisionId: string;
+  timestamp: string;
+  type: string;
+  guardId?: string;
+  guardName?: string;
+  content?: string;
+}
+
+// --- incident type ---
+
+export interface Incident {
+  id: string;
+  agentActionId: string;
+  locationId: string;
+  timestamp: string;
+  status: 'open' | 'resolved' | 'false_alarm' | 'escalated';
+  outcomeNotes?: string;
+  resolvedAt?: string;
+}
+
 // --- seed ---
 
-export const seedIfEmpty = (): void => {
+export const seedIfEmpty = (data: ScenarioData): void => {
   const count = (db.prepare('SELECT COUNT(*) AS n FROM locations').get() as { n: number }).n;
   if (count > 0) return;
 
-  for (const loc of SEED_LOCATIONS) {
+  for (const loc of data.locations) {
     db.prepare(`INSERT INTO locations (id, name, address, type, capacity) VALUES (?, ?, ?, ?, ?)`)
       .run(loc.id, loc.name, loc.address, loc.type, loc.capacity);
   }
 
-  for (const z of SEED_ZONES) {
+  for (const z of data.zones) {
     db.prepare(`INSERT INTO location_zones (id, location_id, label, lat, lng, sensitivity, authorized_hours_start, authorized_hours_end) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(z.id, z.locationId, z.label, z.lat, z.lng, z.sensitivity, z.authorizedHoursStart, z.authorizedHoursEnd);
   }
 
-  for (const g of SEED_GUARDS) {
+  for (const g of data.guards) {
     db.prepare(`INSERT INTO guards (id, name, gender, experience_years, armed, role) VALUES (?, ?, ?, ?, ?, ?)`)
       .run(g.id, g.name, g.gender, g.experienceYears, g.armed ? 1 : 0, g.role);
   }
 
-  for (const s of SEED_SHIFTS) {
+  for (const s of data.shifts) {
     db.prepare(`INSERT INTO shifts (id, location_id, goal, guard_type, expected_activity, active) VALUES (?, ?, ?, ?, ?, ?)`)
       .run(s.id, s.locationId, s.goal, s.guardType, s.expectedActivity, s.active ? 1 : 0);
   }
 
-  for (const sg of SEED_SHIFT_GUARDS) {
+  for (const sg of data.shiftGuards) {
     db.prepare(`INSERT INTO shift_guards (shift_id, guard_id, starting_zone_id) VALUES (?, ?, ?)`)
       .run(sg.shiftId, sg.guardId, sg.startingZoneId);
   }
 
-  console.log(`Seeded ${SEED_GUARDS.length} guards across ${SEED_SHIFTS.length} shift(s) at ${SEED_LOCATIONS.length} venue(s)`);
+  console.log(`[${scenarioName}] Seeded ${data.guards.length} guards across ${data.shifts.length} shift(s) at ${data.locations.length} venue(s)`);
 };
 
 // --- load active shifts ---
@@ -377,6 +420,59 @@ export const appendVenueNote = (id: string, locationId: string, content: string,
 export const loadRecentVenueNotes = (locationId: string, limit = 5): Array<{ id: string; content: string; occurredAt: string }> => {
   const rows = db.prepare(`SELECT id, content, occurred_at FROM venue_notes WHERE location_id = ? ORDER BY occurred_at DESC LIMIT ?`).all(locationId, limit) as Array<{ id: string; content: string; occurred_at: string }>;
   return rows.map(r => ({ id: r.id, content: r.content, occurredAt: r.occurred_at }));
+};
+
+export const saveAgentAction = (action: AgentAction): void => {
+  db.prepare(`
+    INSERT INTO agent_actions (id, decision_id, timestamp, type, guard_id, guard_name, content)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(action.id, action.decisionId, action.timestamp, action.type, action.guardId ?? null, action.guardName ?? null, action.content ?? null);
+};
+
+export const loadRecentAgentActions = (limit = 50): AgentAction[] => {
+  const rows = db.prepare(`
+    SELECT id, decision_id, timestamp, type, guard_id, guard_name, content
+    FROM agent_actions ORDER BY timestamp DESC LIMIT ?
+  `).all(limit) as Array<{ id: string; decision_id: string; timestamp: string; type: string; guard_id: string | null; guard_name: string | null; content: string | null }>;
+  return rows.map(r => ({
+    id: r.id,
+    decisionId: r.decision_id,
+    timestamp: r.timestamp,
+    type: r.type,
+    guardId: r.guard_id ?? undefined,
+    guardName: r.guard_name ?? undefined,
+    content: r.content ?? undefined,
+  }));
+};
+
+export const loadAgentAction = (id: string): AgentAction | null => {
+  const r = db.prepare(`SELECT id, decision_id, timestamp, type, guard_id, guard_name, content FROM agent_actions WHERE id = ?`).get(id) as { id: string; decision_id: string; timestamp: string; type: string; guard_id: string | null; guard_name: string | null; content: string | null } | undefined;
+  if (!r) return null;
+  return { id: r.id, decisionId: r.decision_id, timestamp: r.timestamp, type: r.type, guardId: r.guard_id ?? undefined, guardName: r.guard_name ?? undefined, content: r.content ?? undefined };
+};
+
+export const saveIncident = (incident: Incident): void => {
+  db.prepare(`
+    INSERT INTO incidents (id, agent_action_id, location_id, timestamp, status)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(incident.id, incident.agentActionId, incident.locationId, incident.timestamp, incident.status);
+};
+
+export const resolveIncident = (id: string, status: string, notes: string | null, resolvedAt: string): void => {
+  db.prepare(`
+    UPDATE incidents SET status = ?, outcome_notes = ?, resolved_at = ? WHERE id = ?
+  `).run(status, notes, resolvedAt, id);
+};
+
+export const loadIncident = (id: string): Incident | null => {
+  const r = db.prepare(`SELECT id, agent_action_id, location_id, timestamp, status, outcome_notes, resolved_at FROM incidents WHERE id = ?`).get(id) as { id: string; agent_action_id: string; location_id: string; timestamp: string; status: string; outcome_notes: string | null; resolved_at: string | null } | undefined;
+  if (!r) return null;
+  return { id: r.id, agentActionId: r.agent_action_id, locationId: r.location_id, timestamp: r.timestamp, status: r.status as Incident['status'], outcomeNotes: r.outcome_notes ?? undefined, resolvedAt: r.resolved_at ?? undefined };
+};
+
+export const loadRecentIncidents = (limit = 50): Incident[] => {
+  const rows = db.prepare(`SELECT id, agent_action_id, location_id, timestamp, status, outcome_notes, resolved_at FROM incidents ORDER BY timestamp DESC LIMIT ?`).all(limit) as Array<{ id: string; agent_action_id: string; location_id: string; timestamp: string; status: string; outcome_notes: string | null; resolved_at: string | null }>;
+  return rows.map(r => ({ id: r.id, agentActionId: r.agent_action_id, locationId: r.location_id, timestamp: r.timestamp, status: r.status as Incident['status'], outcomeNotes: r.outcome_notes ?? undefined, resolvedAt: r.resolved_at ?? undefined }));
 };
 
 // --- history query ---

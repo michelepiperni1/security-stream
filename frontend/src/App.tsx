@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from 'react-resizable-panels';
-import type { SecurityEvent, Decision, ShiftInfo, GuardMemo, ShiftMemo, VenueNote, GpsEvent, WearableEvent, GuardMessage, PanicEvent } from './types';
+import { Link, useLocation } from 'wouter';
+import type { SecurityEvent, Decision, ShiftInfo, GuardMemo, ShiftMemo, VenueNote, AgentAction, Incident, GpsEvent, WearableEvent, GuardMessage, PanicEvent } from './types';
 import LiveFeed from './components/LiveFeed';
 import ShiftPanel from './components/ShiftPanel';
 import MapView from './components/MapView';
@@ -12,6 +13,8 @@ const App = () => {
   const [memos, setMemos] = useState<Map<string, GuardMemo>>(new Map());
   const [shiftMemo, setShiftMemo] = useState<ShiftMemo | null>(null);
   const [venueNotes, setVenueNotes] = useState<VenueNote[]>([]);
+  const [agentActions, setAgentActions] = useState<AgentAction[]>([]);
+  const [incidents, setIncidents] = useState<Map<string, Incident>>(new Map());
   const [connected, setConnected] = useState(false);
   const [selectedGuardId, setSelectedGuardId] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
@@ -59,6 +62,20 @@ const App = () => {
       .then((notes: VenueNote[]) => setVenueNotes(notes))
       .catch(() => {});
 
+    fetch('http://localhost:3000/agent-actions')
+      .then(r => r.json())
+      .then((actions: AgentAction[]) => setAgentActions(actions))
+      .catch(() => {});
+
+    fetch('http://localhost:3000/incidents')
+      .then(r => r.json())
+      .then((list: Incident[]) => {
+        const map = new Map<string, Incident>();
+        list.forEach(i => map.set(i.agentActionId, i));
+        setIncidents(map);
+      })
+      .catch(() => {});
+
     const es = new EventSource('http://localhost:3000/events');
     esRef.current = es;
 
@@ -97,9 +114,25 @@ const App = () => {
       setVenueNotes(prev => [note, ...prev].slice(0, 20));
     });
 
+    es.addEventListener('agent_action', (e) => {
+      const action = JSON.parse((e as MessageEvent).data) as AgentAction;
+      setAgentActions(prev => [action, ...prev].slice(0, 100));
+    });
+
+    es.addEventListener('incident_update', (e) => {
+      const update = JSON.parse((e as MessageEvent).data) as { id: string; agentActionId: string; status: Incident['status']; resolvedAt: string };
+      setIncidents(prev => {
+        const next = new Map(prev);
+        const existing = next.get(update.agentActionId);
+        if (existing) next.set(update.agentActionId, { ...existing, status: update.status, resolvedAt: update.resolvedAt });
+        return next;
+      });
+    });
+
     return () => es.close();
   }, []);
 
+  const [location] = useLocation();
   const venueName = shift?.venueName ?? events.find(e => e.venueName)?.venueName ?? 'Security Stream';
 
   // Only meaningful events in the log: messages, panics, and wearables that triggered a decision
@@ -113,6 +146,14 @@ const App = () => {
     <div className="flex flex-col h-dvh bg-slate-900 text-slate-100">
       <header className="flex items-center justify-between px-5 py-3 border-b border-slate-700/50 shrink-0">
         <span className="text-sm font-semibold text-slate-100 tracking-wide">{venueName}</span>
+        <nav className="flex gap-1">
+          <Link href="/" className={`text-xs px-3 py-1.5 rounded transition-colors cursor-pointer ${location === '/' ? 'bg-slate-700 text-slate-200' : 'text-slate-500 hover:text-slate-300'}`}>
+            Dashboard
+          </Link>
+          <Link href="/sim" className={`text-xs px-3 py-1.5 rounded transition-colors cursor-pointer ${location === '/sim' ? 'bg-slate-700 text-slate-200' : 'text-slate-500 hover:text-slate-300'}`}>
+            Simulator
+          </Link>
+        </nav>
         <div className="flex items-center gap-2">
           <span className={`h-2 w-2 rounded-full ${connected ? 'bg-green-400' : 'bg-slate-600'}`} />
           <span className="text-xs text-slate-400">{connected ? 'Live' : 'Connecting…'}</span>
@@ -134,7 +175,7 @@ const App = () => {
           </Panel>
           <PanelResizeHandle className="resize-handle-v" />
           <Panel defaultSize={35} minSize={10}>
-            <LiveFeed events={logEvents} decisions={decisions} />
+            <LiveFeed events={logEvents} decisions={decisions} agentActions={agentActions} />
           </Panel>
         </PanelGroup>
 
@@ -146,6 +187,8 @@ const App = () => {
             memos={memos}
             shiftMemo={shiftMemo}
             venueNotes={venueNotes}
+            agentActions={agentActions}
+            incidents={incidents}
             selectedGuardId={selectedGuardId}
             onSelectGuard={setSelectedGuardId}
           />

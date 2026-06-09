@@ -1,45 +1,57 @@
 import { randomUUID } from 'crypto';
-import type { AgentReport } from './simulator.js';
-import type { Decision } from './db.js';
-import { getFalsePositiveRate } from './db.js';
+import type { SecurityEvent, GpsEvent, WearableEvent } from './events.js';
+import type { Decision, GuardProfile } from './db.js';
 import { getProvider } from './providers/index.js';
 
-const SYSTEM_PROMPT = `You are an AI dispatch coordinator for a physical security operations center. You receive real-time sensor reports from security guards (via their phones) and autonomous patrol robots across multiple venues and shift types.
+export interface GuardContext {
+  lastGps: GpsEvent | null;
+  recentWearable: WearableEvent[];
+  profile: GuardProfile | null;
+  shiftGoal: string;
+  venueName: string;
+  venueType: string;
+  expectedActivity: string;
+}
 
-Your job: analyze each incoming report and decide what action, if any, is required.
+const SYSTEM_PROMPT = `You are an AI dispatch coordinator for a physical security operations center. You receive real-time event streams from security guards across active shifts.
 
-## Context matters enormously
-Each report includes a shiftContext:
-- guardType: bouncer, patrol, event, or private
-- venueType: the specific type of venue (nightclub, construction_site, concert, etc.)
-- expectedActivity: how busy the venue normally is right now (none/low/normal/high/peak)
+Guard data arrives as four independent streams — you are called when a threshold is crossed:
+- GPS (~every 5s): location updates. You are NOT called for GPS events alone.
+- Wearable (~every 3s): heart rate, movement. You ARE called when: running, fall detected, or HR > 90 bpm.
+- Message (discrete): text communications from the guard. You ARE always called for messages.
+- Panic (discrete): explicit distress signal from the panic button. You ARE always called for panic events.
 
-A guard running with raised voices at a nightclub during peak hours may be completely routine. The same reading from a patrol guard at a construction site overnight with expectedActivity "none" is a serious incident requiring immediate response.
+When you are called, you receive the triggering event plus recent GPS and wearable context for that guard.
 
-## Sensor fields
+## Guard profiles matter
+Each guard has a profile: name, gender, experience level, armed status, and role. An armed guard vs an unarmed one has different response capabilities. A 12-year veteran shift supervisor warrants different guidance than a 3-year bar security guard. A door supervisor at a nightclub has different expected behaviour than a floor patrol guard.
 
-Guard sensors:
-- movement: stationary | walking | running | fall_detected
-- audioAlert: none | raised_voices | glass_break | alarm | gunshot
-- heartRateBpm: >90 suggests stress or exertion; consider alongside other signals
-- panicPressed: explicit distress signal — always take seriously regardless of context
-- dutyStatus: patrolling (available) | responding (already engaged) | escorting | on_break
+## Shift context matters enormously
+Each shift has:
+- A written goal stating the security objectives for this shift
+- guardType: bouncer, patrol, event, or private — defines expected behaviour
+- venueType: the specific venue (nightclub, construction_site, concert, etc.)
+- expectedActivity: how busy the venue is right now (none/low/normal/high/peak)
 
-Robot sensors:
-- personDetected: camera/lidar confirmed human presence
-- motionDetected: motion sensor triggered (higher false positive rate than personDetected)
-- thermalAnomaly: heat signature inconsistent with environment
-- soundLevelDb: >60dB is notably loud, >75dB is very loud
-- patrolStatus: patrolling | investigating (robot flagged something) | docked | error
+Running + elevated HR at a nightclub bouncer during peak hours is very different from the same at a patrol guard on a construction site overnight. Always factor in context before escalating.
 
-Zone context:
-- sensitivity: public (open to all) | controlled (limited access) | restricted (very limited access)
-- outOfHours: true if this report is outside the zone's authorized operating hours
+## Zone sensitivity
+- public: open to all
+- controlled: limited access — unexpected activity warrants attention
+- restricted: very limited access — any unexpected activity is serious
+- outOfHours: guard is operating outside authorized hours for this zone
+
+## Event types and how to read them
+- Wearable threshold crossing: assess severity based on HR level, movement type, and how long it's been elevated (use recentWearable array). A single elevated reading may be noise; sustained elevation is more significant.
+- message/request_backup: guard is explicitly asking for help — treat as high priority unless context clearly indicates false alarm
+- message/suspicious_activity: guard has flagged something — investigate based on venue and zone
+- message/status_update or all_clear: routine, usually results in dismiss or monitor
+- panic: highest urgency signal — almost always warrants dispatch_guard or escalate
 
 ## Available actions
 - dispatch_guard: send a human guard to investigate or intervene
-- dispatch_robot: send a robot to investigate first — lower risk, preserves human resources
-- escalate: page the supervisor immediately — for critical or ambiguous high-stakes situations
+- dispatch_robot: send a robot to investigate first — lower escalation, preserves human resources
+- escalate: page the supervisor — for critical or ambiguous high-stakes situations
 - monitor: flag for attention but no immediate physical response needed
 - dismiss: no action required, consistent with normal activity for this venue/time
 
@@ -48,53 +60,43 @@ Zone context:
 2 = low — worth noting
 3 = medium — should be checked soon
 4 = high — needs prompt response
-5 = critical — immediate action required
-
-## Historical false positive rate
-You will be given the historical false positive rate for this zone and shift. A high rate means past alerts here were often false alarms — factor this into your confidence, but don't dismiss genuinely alarming signals on that basis alone.`;
-
-const isWorthAnalyzing = (report: AgentReport): boolean => {
-  if (report.agentType === 'guard') {
-    return (
-      report.panicPressed ||
-      report.sensors.movement === 'running' ||
-      report.sensors.movement === 'fall_detected' ||
-      report.sensors.audioAlert !== 'none' ||
-      report.sensors.heartRateBpm > 90 ||
-      (report.outOfHours && report.location.sensitivity !== 'public')
-    );
-  }
-  return (
-    report.sensors.personDetected ||
-    report.sensors.thermalAnomaly ||
-    report.sensors.soundLevelDb > 55 ||
-    report.patrolStatus === 'investigating' ||
-    (report.outOfHours && report.location.sensitivity !== 'public')
-  );
-};
+5 = critical — immediate action required`;
 
 export interface DecisionWithThinking extends Decision {
   thinking?: string;
 }
 
-export const analyzeReport = async (report: AgentReport): Promise<DecisionWithThinking | null> => {
-  if (!isWorthAnalyzing(report)) return null;
+export const analyzeEvent = async (
+  event: SecurityEvent,
+  context: GuardContext,
+): Promise<DecisionWithThinking | null> => {
+  const profileLine = context.profile
+    ? `${context.profile.name} | ${context.profile.gender} | ${context.profile.experienceYears} yrs experience | ${context.profile.armed ? 'armed' : 'unarmed'} | role: ${context.profile.role}`
+    : 'unknown guard';
 
-  const falsePositiveRate = getFalsePositiveRate(report.shiftContext.shiftId, report.location.label);
+  const userMessage = `Triggering event:
+${JSON.stringify(event, null, 2)}
 
-  const userMessage = `Incoming security report:
-${JSON.stringify(report, null, 2)}
+Guard profile:
+- ${profileLine}
 
-Historical context:
-- False positive rate for "${report.location.label}" at ${report.shiftContext.venueName}: ${Math.round(falsePositiveRate * 100)}%
+Guard context:
+- Last known location: ${context.lastGps ? `${context.lastGps.location.label} (${context.lastGps.location.sensitivity}, out-of-hours: ${context.lastGps.outOfHours})` : 'unknown'}
+- Recent wearable (newest first): ${context.recentWearable.length > 0
+    ? context.recentWearable.map(w => `HR ${w.heartRateBpm} bpm, ${w.movement}`).join(' → ')
+    : 'none yet'}
 
-Analyze this report and return your dispatch decision.`;
+Shift context:
+- Venue: ${context.venueName} (${context.venueType}, expected activity: ${context.expectedActivity})
+- Goal: ${context.shiftGoal}
+
+Analyze this event and return your dispatch decision.`;
 
   const result = await getProvider().analyze(SYSTEM_PROMPT, userMessage);
 
   return {
     id: randomUUID(),
-    reportId: report.id,
+    eventId: event.id,
     timestamp: new Date().toISOString(),
     priority: result.priority,
     action: result.action as Decision['action'],

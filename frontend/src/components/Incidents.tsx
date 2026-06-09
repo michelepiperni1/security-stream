@@ -1,10 +1,10 @@
 import { ScrollArea } from '@/components/ui/scroll-area';
-import ReportCard from './ReportCard';
-import type { ReportWithDecision } from '@/types';
+import IncidentCard from './IncidentCard';
+import type { SecurityEvent, Decision } from '@/types';
 import { AlertTriangle } from 'lucide-react';
 
 interface Props {
-  incidents: ReportWithDecision[];
+  incidents: Array<{ event: SecurityEvent; decision: Decision | null }>;
 }
 
 const Incidents = ({ incidents }: Props) => (
@@ -21,9 +21,11 @@ const Incidents = ({ incidents }: Props) => (
             <p className="text-slate-600 text-xs">No active incidents</p>
           </div>
         )}
-        {incidents.map(({ report, decision }) => (
-          <ReportCard key={report.id} report={report} decision={decision} />
-        ))}
+        {incidents.map(({ event, decision }) =>
+          decision ? (
+            <IncidentCard key={event.id} event={event} decision={decision} />
+          ) : null
+        )}
       </div>
     </ScrollArea>
   </div>

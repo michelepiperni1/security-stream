@@ -1,3 +1,6 @@
+// SecurityEvent type definitions — imported by both simulator.ts and db.ts
+// Kept separate to avoid circular dependency between those two modules.
+
 export interface GpsEvent {
   id: string;
   type: 'gps';
@@ -47,43 +50,3 @@ export interface PanicEvent {
 }
 
 export type SecurityEvent = GpsEvent | WearableEvent | GuardMessage | PanicEvent;
-
-export interface GuardProfile {
-  id: string;
-  name: string;
-  gender: string;
-  experienceYears: number;
-  armed: boolean;
-  role: string;
-  startingZoneIndex: number;
-}
-
-export interface ShiftInfo {
-  id: string;
-  goal: string;
-  venueName: string;
-  venueAddress: string;
-  venueType: string;
-  venueCapacity: number;
-  guardType: string;
-  expectedActivity: string;
-  zones: Array<{
-    id: string;
-    label: string;
-    lat: number;
-    lng: number;
-    sensitivity: string;
-  }>;
-  guards: GuardProfile[];
-}
-
-export interface Decision {
-  id: string;
-  eventId: string;
-  timestamp: string;
-  priority: number;
-  action: 'dispatch_guard' | 'dispatch_robot' | 'escalate' | 'monitor' | 'dismiss';
-  reasoning: string;
-  confidence: number;
-  thinking?: string;
-}

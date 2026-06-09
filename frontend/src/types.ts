@@ -87,3 +87,23 @@ export interface Decision {
   confidence: number;
   thinking?: string;
 }
+
+export interface GuardMemo {
+  guardId: string;
+  shiftId: string;
+  content: string;
+  updatedAt: string;
+}
+
+export interface ShiftMemo {
+  shiftId: string;
+  content: string;
+  updatedAt: string;
+}
+
+export interface VenueNote {
+  id: string;
+  locationId: string;
+  content: string;
+  occurredAt: string;
+}

@@ -10,7 +10,10 @@ Respond with ONLY a JSON object — no markdown, no explanation. Schema:
   "priority": <integer 1-5>,
   "action": <"dispatch_guard" | "dispatch_robot" | "escalate" | "monitor" | "dismiss">,
   "reasoning": <string, 2-3 sentences summarising your decision>,
-  "confidence": <float 0.0-1.0>
+  "confidence": <float 0.0-1.0>,
+  "memo": <string, 2-4 sentence running assessment of this guard for the shift>,
+  "shift_memo": <string, 1-2 sentence snapshot of overall shift state across all guards>,
+  "venue_note": <string or null, 1 sentence about a noteworthy incident for venue history — only include if priority >= 4, otherwise null>
 }`;
 
 export class OllamaProvider implements LLMProvider {
@@ -48,6 +51,9 @@ export class OllamaProvider implements LLMProvider {
       action: string;
       reasoning: string;
       confidence: number;
+      memo?: string;
+      shift_memo?: string;
+      venue_note?: string;
     };
 
     return {
@@ -56,6 +62,9 @@ export class OllamaProvider implements LLMProvider {
       action: parsed.action as LLMDecision['action'],
       reasoning: parsed.reasoning,
       confidence: parsed.confidence,
+      memo: parsed.memo,
+      shiftMemo: parsed.shift_memo,
+      venueNote: parsed.venue_note ?? undefined,
     };
   }
 }

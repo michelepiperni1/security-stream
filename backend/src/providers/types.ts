@@ -3,6 +3,9 @@ export interface LLMDecision {
   action: 'dispatch_guard' | 'dispatch_robot' | 'escalate' | 'monitor' | 'dismiss';
   reasoning: string;
   confidence: number;
+  memo?: string;
+  shiftMemo?: string;
+  venueNote?: string;
   thinking?: string;
 }
 

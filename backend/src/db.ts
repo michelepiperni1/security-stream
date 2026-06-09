@@ -107,6 +107,27 @@ db.exec(`
     reasoning  TEXT NOT NULL,
     confidence REAL NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS guard_memos (
+    guard_id   TEXT NOT NULL,
+    shift_id   TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (guard_id, shift_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS shift_memos (
+    shift_id   TEXT PRIMARY KEY,
+    content    TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS venue_notes (
+    id          TEXT PRIMARY KEY,
+    location_id TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    occurred_at TEXT NOT NULL
+  );
 `);
 
 // --- entity types ---
@@ -133,6 +154,7 @@ export interface GuardProfile {
 
 export interface LoadedShift {
   id: string;
+  locationId: string;
   goal: string;
   venueName: string;
   venueAddress: string;
@@ -194,13 +216,13 @@ export const seedIfEmpty = (): void => {
 
 export const loadActiveShifts = (): LoadedShift[] => {
   const shifts = db.prepare(`
-    SELECT s.id, s.goal, s.guard_type, s.expected_activity,
+    SELECT s.id, s.location_id, s.goal, s.guard_type, s.expected_activity,
            l.name AS venue_name, l.address AS venue_address, l.type AS venue_type, l.capacity AS venue_capacity
     FROM shifts s
     JOIN locations l ON l.id = s.location_id
     WHERE s.active = 1
   `).all() as Array<{
-    id: string; goal: string; guard_type: string; expected_activity: string;
+    id: string; location_id: string; goal: string; guard_type: string; expected_activity: string;
     venue_name: string; venue_address: string; venue_type: string; venue_capacity: number;
   }>;
 
@@ -239,6 +261,7 @@ export const loadActiveShifts = (): LoadedShift[] => {
 
     return {
       id: shift.id,
+      locationId: shift.location_id,
       goal: shift.goal,
       venueName: shift.venue_name,
       venueAddress: shift.venue_address,
@@ -318,6 +341,42 @@ export const saveEvent = (event: SecurityEvent): void => {
 
 export const saveDecision = (decision: Decision): void => {
   insertDecision.run({ id: decision.id, eventId: decision.eventId, timestamp: decision.timestamp, priority: decision.priority, action: decision.action, reasoning: decision.reasoning, confidence: decision.confidence });
+};
+
+export const saveGuardMemo = (guardId: string, shiftId: string, content: string, updatedAt: string): void => {
+  db.prepare(`
+    INSERT INTO guard_memos (guard_id, shift_id, content, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT (guard_id, shift_id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at
+  `).run(guardId, shiftId, content, updatedAt);
+};
+
+export const loadGuardMemos = (shiftId: string): Map<string, { content: string; updatedAt: string }> => {
+  const rows = db.prepare(`SELECT guard_id, content, updated_at FROM guard_memos WHERE shift_id = ?`).all(shiftId) as Array<{ guard_id: string; content: string; updated_at: string }>;
+  const map = new Map<string, { content: string; updatedAt: string }>();
+  for (const row of rows) map.set(row.guard_id, { content: row.content, updatedAt: row.updated_at });
+  return map;
+};
+
+export const saveShiftMemo = (shiftId: string, content: string, updatedAt: string): void => {
+  db.prepare(`
+    INSERT INTO shift_memos (shift_id, content, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT (shift_id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at
+  `).run(shiftId, content, updatedAt);
+};
+
+export const loadShiftMemo = (shiftId: string): { content: string; updatedAt: string } | null => {
+  const row = db.prepare(`SELECT content, updated_at FROM shift_memos WHERE shift_id = ?`).get(shiftId) as { content: string; updated_at: string } | undefined;
+  return row ? { content: row.content, updatedAt: row.updated_at } : null;
+};
+
+export const appendVenueNote = (id: string, locationId: string, content: string, occurredAt: string): void => {
+  db.prepare(`INSERT INTO venue_notes (id, location_id, content, occurred_at) VALUES (?, ?, ?, ?)`).run(id, locationId, content, occurredAt);
+};
+
+export const loadRecentVenueNotes = (locationId: string, limit = 5): Array<{ id: string; content: string; occurredAt: string }> => {
+  const rows = db.prepare(`SELECT id, content, occurred_at FROM venue_notes WHERE location_id = ? ORDER BY occurred_at DESC LIMIT ?`).all(locationId, limit) as Array<{ id: string; content: string; occurred_at: string }>;
+  return rows.map(r => ({ id: r.id, content: r.content, occurredAt: r.occurred_at }));
 };
 
 // --- history query ---

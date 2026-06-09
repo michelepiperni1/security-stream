@@ -21,8 +21,11 @@ export class ClaudeProvider implements LLMProvider {
               action:     { type: 'string', enum: ['dispatch_guard', 'dispatch_robot', 'escalate', 'monitor', 'dismiss'] },
               reasoning:  { type: 'string' },
               confidence: { type: 'number' },
+              memo:       { type: 'string' },
+              shift_memo: { type: 'string' },
+              venue_note: { type: 'string' },
             },
-            required: ['priority', 'action', 'reasoning', 'confidence'],
+            required: ['priority', 'action', 'reasoning', 'confidence', 'memo', 'shift_memo'],
             additionalProperties: false,
           },
         },
@@ -30,7 +33,7 @@ export class ClaudeProvider implements LLMProvider {
     });
 
     let thinking: string | undefined;
-    let parsed: { priority: number; action: string; reasoning: string; confidence: number } | undefined;
+    let parsed: { priority: number; action: string; reasoning: string; confidence: number; memo: string; shift_memo: string; venue_note?: string } | undefined;
 
     for (const block of response.content) {
       if (block.type === 'thinking') thinking = block.thinking;
@@ -44,6 +47,9 @@ export class ClaudeProvider implements LLMProvider {
       action: parsed.action as LLMDecision['action'],
       reasoning: parsed.reasoning,
       confidence: parsed.confidence,
+      memo: parsed.memo,
+      shiftMemo: parsed.shift_memo,
+      venueNote: parsed.venue_note,
       thinking,
     };
   }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from 'react-resizable-panels';
-import type { SecurityEvent, Decision, ShiftInfo, GpsEvent, WearableEvent, GuardMessage, PanicEvent } from './types';
+import type { SecurityEvent, Decision, ShiftInfo, GuardMemo, ShiftMemo, VenueNote, GpsEvent, WearableEvent, GuardMessage, PanicEvent } from './types';
 import LiveFeed from './components/LiveFeed';
 import ShiftPanel from './components/ShiftPanel';
 import MapView from './components/MapView';
@@ -9,6 +9,9 @@ const App = () => {
   const [events, setEvents] = useState<SecurityEvent[]>([]);
   const [decisions, setDecisions] = useState<Map<string, Decision>>(new Map());
   const [shift, setShift] = useState<ShiftInfo | null>(null);
+  const [memos, setMemos] = useState<Map<string, GuardMemo>>(new Map());
+  const [shiftMemo, setShiftMemo] = useState<ShiftMemo | null>(null);
+  const [venueNotes, setVenueNotes] = useState<VenueNote[]>([]);
   const [connected, setConnected] = useState(false);
   const [selectedGuardId, setSelectedGuardId] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
@@ -27,6 +30,33 @@ const App = () => {
     fetch('http://localhost:3000/shift')
       .then(r => r.json())
       .then((shifts: ShiftInfo[]) => { if (shifts[0]) setShift(shifts[0]); })
+      .catch(() => {});
+
+    fetch('http://localhost:3000/memos')
+      .then(r => r.json())
+      .then((data: Record<string, { content: string; updatedAt: string }>) => {
+        const map = new Map<string, GuardMemo>();
+        for (const [guardId, memo] of Object.entries(data)) {
+          map.set(guardId, { guardId, shiftId: '', content: memo.content, updatedAt: memo.updatedAt });
+        }
+        setMemos(map);
+      })
+      .catch(() => {});
+
+    fetch('http://localhost:3000/shift-memo')
+      .then(r => r.json())
+      .then((data: Record<string, { content: string; updatedAt: string }>) => {
+        const entries = Object.entries(data);
+        if (entries[0]) {
+          const [shiftId, memo] = entries[0];
+          setShiftMemo({ shiftId, content: memo.content, updatedAt: memo.updatedAt });
+        }
+      })
+      .catch(() => {});
+
+    fetch('http://localhost:3000/venue-notes')
+      .then(r => r.json())
+      .then((notes: VenueNote[]) => setVenueNotes(notes))
       .catch(() => {});
 
     const es = new EventSource('http://localhost:3000/events');
@@ -52,13 +82,32 @@ const App = () => {
       setDecisions(prev => new Map(prev).set(decision.eventId, decision));
     });
 
+    es.addEventListener('memo', (e) => {
+      const memo = JSON.parse((e as MessageEvent).data) as GuardMemo;
+      setMemos(prev => new Map(prev).set(memo.guardId, memo));
+    });
+
+    es.addEventListener('shift_memo', (e) => {
+      const sm = JSON.parse((e as MessageEvent).data) as ShiftMemo;
+      setShiftMemo(sm);
+    });
+
+    es.addEventListener('venue_note', (e) => {
+      const note = JSON.parse((e as MessageEvent).data) as VenueNote;
+      setVenueNotes(prev => [note, ...prev].slice(0, 20));
+    });
+
     return () => es.close();
   }, []);
 
   const venueName = shift?.venueName ?? events.find(e => e.venueName)?.venueName ?? 'Security Stream';
 
-  // GPS events are shown on the map — exclude them from the log
-  const logEvents = events.filter(e => e.type !== 'gps');
+  // Only meaningful events in the log: messages, panics, and wearables that triggered a decision
+  const logEvents = events.filter(e =>
+    e.type === 'message' ||
+    e.type === 'panic' ||
+    (e.type === 'wearable' && decisions.has(e.id))
+  );
 
   return (
     <div className="flex flex-col h-dvh bg-slate-900 text-slate-100">
@@ -94,6 +143,9 @@ const App = () => {
           <ShiftPanel
             shift={shift}
             events={events}
+            memos={memos}
+            shiftMemo={shiftMemo}
+            venueNotes={venueNotes}
             selectedGuardId={selectedGuardId}
             onSelectGuard={setSelectedGuardId}
           />

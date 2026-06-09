@@ -10,7 +10,7 @@ interface Props {
 const LiveFeed = ({ events, decisions }: Props) => (
   <div className="flex flex-col h-full min-h-0 bg-slate-900">
     <div className="px-4 py-2 border-b border-slate-700/50 flex items-center gap-3">
-      <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400">Events</h2>
+      <h2 className="text-xs font-semibold uppercase tracking-widest text-slate-400">Activity</h2>
       <span className="text-[10px] text-slate-600">{events.length}</span>
     </div>
     <ScrollArea className="flex-1 min-h-0">

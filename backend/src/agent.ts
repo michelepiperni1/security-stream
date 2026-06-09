@@ -11,6 +11,9 @@ export interface GuardContext {
   venueName: string;
   venueType: string;
   expectedActivity: string;
+  currentMemo: string | null;
+  shiftMemo: string | null;
+  venueHistory: string[];
 }
 
 const SYSTEM_PROMPT = `You are an AI dispatch coordinator for a physical security operations center. You receive real-time event streams from security guards across active shifts.
@@ -60,9 +63,20 @@ Running + elevated HR at a nightclub bouncer during peak hours is very different
 2 = low — worth noting
 3 = medium — should be checked soon
 4 = high — needs prompt response
-5 = critical — immediate action required`;
+5 = critical — immediate action required
+
+## Working memory
+After each decision you must rewrite your memo for this guard in 2–4 sentences. It will be shown to you before your next decision for this guard. Use it to track behavioral patterns, open concerns, health observations, and prior incidents. Write it as a concise operational note — not a summary of the triggering event, but your running assessment of this guard's state this shift.
+
+## Shift-level memory
+You also maintain a shift memo — a 1–2 sentence snapshot of the overall shift state across all guards (incident count, hot zones, guards to watch). Rewrite it after every decision.
+
+Separately, if this decision reveals something worth remembering for future shifts at this venue — a recurring problem zone, a serious incident pattern, a notable event type — write a brief venue_note (1 sentence max). It will be permanently appended to the venue's history and shown to future dispatchers. Only write a venue_note when priority ≥ 4 and the event is genuinely noteworthy. Do not write one for routine events.`;
 
 export interface DecisionWithThinking extends Decision {
+  memo?: string;
+  shiftMemo?: string;
+  venueNote?: string;
   thinking?: string;
 }
 
@@ -90,7 +104,18 @@ Shift context:
 - Venue: ${context.venueName} (${context.venueType}, expected activity: ${context.expectedActivity})
 - Goal: ${context.shiftGoal}
 
-Analyze this event and return your dispatch decision.`;
+Your prior assessment of this guard (rewrite this in your response):
+${context.currentMemo ?? 'No prior assessment yet.'}
+
+Current shift memo (rewrite this in your response):
+${context.shiftMemo ?? 'No shift memo yet.'}
+
+Venue history — prior incidents at this venue (read-only context):
+${context.venueHistory.length > 0
+    ? context.venueHistory.map((n, i) => `${i + 1}. ${n}`).join('\n')
+    : 'No prior incidents recorded.'}
+
+Analyze this event, return your dispatch decision, rewrite your guard memo and shift memo, and optionally write a venue_note if warranted.`;
 
   const result = await getProvider().analyze(SYSTEM_PROMPT, userMessage);
 
@@ -102,6 +127,9 @@ Analyze this event and return your dispatch decision.`;
     action: result.action as Decision['action'],
     reasoning: result.reasoning,
     confidence: result.confidence,
+    memo: result.memo,
+    shiftMemo: result.shiftMemo,
+    venueNote: result.venueNote,
     thinking: result.thinking,
   };
 };

@@ -49,4 +49,40 @@ export interface PanicEvent {
   location: { label: string; lat: number; lng: number; };
 }
 
-export type SecurityEvent = GpsEvent | WearableEvent | GuardMessage | PanicEvent;
+export interface RobotGpsEvent {
+  id: string;
+  type: 'robot_gps';
+  timestamp: string;
+  robotId: string;
+  robotName: string;
+  shiftId: string;
+  venueName: string;
+  location: { label: string; lat: number; lng: number; sensitivity: string; };
+  outOfHours: boolean;
+}
+
+export interface RobotTelemetryEvent {
+  id: string;
+  type: 'robot_telemetry';
+  timestamp: string;
+  robotId: string;
+  robotName: string;
+  shiftId: string;
+  venueName: string;
+  batteryPct: number;
+  status: 'patrolling' | 'charging' | 'idle' | 'fault';
+}
+
+export interface RobotAlertEvent {
+  id: string;
+  type: 'robot_alert';
+  timestamp: string;
+  robotId: string;
+  robotName: string;
+  shiftId: string;
+  venueName: string;
+  content: string;
+  alertType: 'motion_detected' | 'thermal_anomaly' | 'camera_obstruction' | 'perimeter_breach' | 'system_fault' | 'status_update';
+}
+
+export type SecurityEvent = GpsEvent | WearableEvent | GuardMessage | PanicEvent | RobotGpsEvent | RobotTelemetryEvent | RobotAlertEvent;

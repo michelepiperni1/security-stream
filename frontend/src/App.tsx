@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from 'react-resizable-panels';
 import { Link, useLocation } from 'wouter';
-import type { SecurityEvent, Decision, ShiftInfo, GuardMemo, ShiftMemo, VenueNote, AgentAction, Incident, GpsEvent, WearableEvent, GuardMessage, PanicEvent } from './types';
+import type { SecurityEvent, Decision, ShiftInfo, GuardMemo, ShiftMemo, VenueNote, AgentAction, Incident, GpsEvent, WearableEvent, GuardMessage, PanicEvent, RobotGpsEvent, RobotTelemetryEvent, RobotAlertEvent } from './types';
 import LiveFeed from './components/LiveFeed';
 import ShiftPanel from './components/ShiftPanel';
 import MapView from './components/MapView';
@@ -16,7 +16,7 @@ const App = () => {
   const [agentActions, setAgentActions] = useState<AgentAction[]>([]);
   const [incidents, setIncidents] = useState<Map<string, Incident>>(new Map());
   const [connected, setConnected] = useState(false);
-  const [selectedGuardId, setSelectedGuardId] = useState<string | null>(null);
+  const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -89,10 +89,13 @@ const App = () => {
       });
     };
 
-    es.addEventListener('gps',      (e) => addEvent(JSON.parse((e as MessageEvent).data) as GpsEvent));
-    es.addEventListener('wearable', (e) => addEvent(JSON.parse((e as MessageEvent).data) as WearableEvent));
-    es.addEventListener('message',  (e) => addEvent(JSON.parse((e as MessageEvent).data) as GuardMessage));
-    es.addEventListener('panic',    (e) => addEvent(JSON.parse((e as MessageEvent).data) as PanicEvent));
+    es.addEventListener('gps',             (e) => addEvent(JSON.parse((e as MessageEvent).data) as GpsEvent));
+    es.addEventListener('wearable',        (e) => addEvent(JSON.parse((e as MessageEvent).data) as WearableEvent));
+    es.addEventListener('message',         (e) => addEvent(JSON.parse((e as MessageEvent).data) as GuardMessage));
+    es.addEventListener('panic',           (e) => addEvent(JSON.parse((e as MessageEvent).data) as PanicEvent));
+    es.addEventListener('robot_gps',       (e) => addEvent(JSON.parse((e as MessageEvent).data) as RobotGpsEvent));
+    es.addEventListener('robot_telemetry', (e) => addEvent(JSON.parse((e as MessageEvent).data) as RobotTelemetryEvent));
+    es.addEventListener('robot_alert',     (e) => addEvent(JSON.parse((e as MessageEvent).data) as RobotAlertEvent));
 
     es.addEventListener('decision', (e) => {
       const decision = JSON.parse((e as MessageEvent).data) as Decision;
@@ -135,11 +138,13 @@ const App = () => {
   const [location] = useLocation();
   const venueName = shift?.venueName ?? events.find(e => e.venueName)?.venueName ?? 'Security Stream';
 
-  // Only meaningful events in the log: messages, panics, and wearables that triggered a decision
+  // Only meaningful events in the log: messages, panics, robot alerts, and wearables/telemetry that triggered a decision
   const logEvents = events.filter(e =>
     e.type === 'message' ||
     e.type === 'panic' ||
-    (e.type === 'wearable' && decisions.has(e.id))
+    e.type === 'robot_alert' ||
+    (e.type === 'wearable' && decisions.has(e.id)) ||
+    (e.type === 'robot_telemetry' && decisions.has(e.id))
   );
 
   return (
@@ -168,8 +173,8 @@ const App = () => {
               <MapView
                 events={events}
                 shift={shift}
-                selectedGuardId={selectedGuardId}
-                onSelectGuard={setSelectedGuardId}
+                selectedUnitId={selectedUnitId}
+                onSelectUnit={setSelectedUnitId}
               />
             </div>
           </Panel>
@@ -189,8 +194,8 @@ const App = () => {
             venueNotes={venueNotes}
             agentActions={agentActions}
             incidents={incidents}
-            selectedGuardId={selectedGuardId}
-            onSelectGuard={setSelectedGuardId}
+            selectedUnitId={selectedUnitId}
+            onSelectUnit={setSelectedUnitId}
           />
         </div>
       </div>

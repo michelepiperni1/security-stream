@@ -2,14 +2,14 @@ import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { simulator, start, pauseSimulator, resumeSimulator, isSimulatorPaused } from './simulator.js';
-import type { GpsEvent, WearableEvent, GuardMessage, PanicEvent, SecurityEvent } from './events.js';
+import type { GpsEvent, WearableEvent, GuardMessage, PanicEvent, RobotGpsEvent, RobotTelemetryEvent, RobotAlertEvent, SecurityEvent } from './events.js';
 import { randomUUID } from 'crypto';
-import { saveEvent, saveDecision, saveGuardMemo, loadGuardMemos, saveShiftMemo, loadShiftMemo, appendVenueNote, loadRecentVenueNotes, saveAgentAction, loadRecentAgentActions, loadAgentAction, saveIncident, resolveIncident, loadIncident, loadRecentIncidents, getRecentHistory, seedIfEmpty, loadActiveShifts } from './db.js';
-import type { GuardProfile, LoadedShift } from './db.js';
+import { saveEvent, saveDecision, saveGuardMemo, loadGuardMemos, saveRobotMemo, loadRobotMemos, saveRobotEvent, saveShiftMemo, loadShiftMemo, appendVenueNote, loadRecentVenueNotes, saveAgentAction, loadRecentAgentActions, loadAgentAction, saveIncident, resolveIncident, loadIncident, loadRecentIncidents, getRecentHistory, seedIfEmpty, loadActiveShifts } from './db.js';
+import type { GuardProfile, RobotProfile, LoadedShift } from './db.js';
 import { scenarios } from './seed.js';
 
 let loadedShifts: LoadedShift[] = [];
-import { analyzeEvent, type GuardContext } from './agent.js';
+import { analyzeEvent, analyzeRobotEvent, type GuardContext, type RobotContext, type DecisionWithThinking } from './agent.js';
 
 const app = Fastify({ logger: true });
 
@@ -41,6 +41,23 @@ interface GuardState {
 
 const guardState = new Map<string, GuardState>();
 
+// --- robot context state ---
+
+interface RobotState {
+  lastGps: RobotGpsEvent | null;
+  recentTelemetry: RobotTelemetryEvent[];
+  profile: RobotProfile | null;
+  shiftGoal: string;
+  venueName: string;
+  venueType: string;
+  expectedActivity: string;
+  currentMemo: string | null;
+  memoUpdatedAt: string | null;
+  shiftId: string;
+}
+
+const robotState = new Map<string, RobotState>();
+
 // --- shift-level state ---
 
 interface ShiftState {
@@ -70,9 +87,27 @@ const getGuardState = (guardId: string): GuardState => {
   return guardState.get(guardId)!;
 };
 
+const getRobotState = (robotId: string): RobotState => {
+  if (!robotState.has(robotId)) {
+    robotState.set(robotId, {
+      lastGps: null,
+      recentTelemetry: [],
+      profile: null,
+      shiftGoal: '',
+      venueName: '',
+      venueType: '',
+      expectedActivity: '',
+      currentMemo: null,
+      memoUpdatedAt: null,
+      shiftId: '',
+    });
+  }
+  return robotState.get(robotId)!;
+};
+
 // --- dispatch ---
 
-const dispatch = (event: SecurityEvent) => {
+const dispatch = (event: GpsEvent | WearableEvent | GuardMessage | PanicEvent) => {
   const state = getGuardState(event.guardId);
   const sState = state.shiftId ? shiftState.get(state.shiftId) ?? null : null;
 
@@ -128,56 +163,135 @@ const dispatch = (event: SecurityEvent) => {
         broadcast('venue_note', { id: noteId, locationId: sState.locationId, content: decision.venueNote, occurredAt: now });
       }
 
-      // Execute real actions
-      const action = decision.action;
-      const locationId = sState?.locationId ?? '';
-      const createIncident = (agentActionId: string) => {
-        if (!locationId) return;
-        saveIncident({ id: randomUUID(), agentActionId, locationId, timestamp: now, status: 'open' });
-      };
-
-      if (action === 'message_guard' && decision.dispatchGuardId && decision.dispatchMessage) {
-        const targetState = guardState.get(decision.dispatchGuardId);
-        const agentAction = {
-          id: randomUUID(), decisionId: decision.id, timestamp: now,
-          type: 'message_guard',
-          guardId: decision.dispatchGuardId,
-          guardName: targetState?.profile?.name ?? decision.dispatchGuardId,
-          content: decision.dispatchMessage,
-        };
-        saveAgentAction(agentAction);
-        createIncident(agentAction.id);
-        broadcast('agent_action', agentAction);
-      } else if (action === 'broadcast_alert' && decision.dispatchMessage) {
-        const agentAction = {
-          id: randomUUID(), decisionId: decision.id, timestamp: now,
-          type: 'broadcast_alert',
-          content: decision.dispatchMessage,
-        };
-        saveAgentAction(agentAction);
-        createIncident(agentAction.id);
-        broadcast('agent_action', agentAction);
-      } else if (action === 'call_police') {
-        const agentAction = {
-          id: randomUUID(), decisionId: decision.id, timestamp: now,
-          type: 'call_police',
-          content: decision.reasoning,
-        };
-        saveAgentAction(agentAction);
-        createIncident(agentAction.id);
-        broadcast('agent_action', agentAction);
-      } else if (action === 'dispatch_robot' || action === 'investigate') {
-        const agentAction = {
-          id: randomUUID(), decisionId: decision.id, timestamp: now,
-          type: action,
-          content: decision.reasoning,
-        };
-        saveAgentAction(agentAction);
-        createIncident(agentAction.id);
-        broadcast('agent_action', agentAction);
-      }
+      executeAction(decision, sState, now);
     })
     .catch(err => app.log.error({ err }, 'Agent analysis failed'));
+};
+
+// --- shared action execution ---
+
+const executeAction = (decision: DecisionWithThinking, sState: ShiftState | null, now: string) => {
+  const action = decision.action;
+  const locationId = sState?.locationId ?? '';
+  const createIncident = (agentActionId: string) => {
+    if (!locationId) return;
+    saveIncident({ id: randomUUID(), agentActionId, locationId, timestamp: now, status: 'open' });
+  };
+
+  if (action === 'message_guard' && decision.dispatchGuardId && decision.dispatchMessage) {
+    const targetState = guardState.get(decision.dispatchGuardId);
+    const agentAction = {
+      id: randomUUID(), decisionId: decision.id, timestamp: now,
+      type: 'message_guard',
+      guardId: decision.dispatchGuardId,
+      guardName: targetState?.profile?.name ?? decision.dispatchGuardId,
+      content: decision.dispatchMessage,
+    };
+    saveAgentAction(agentAction);
+    createIncident(agentAction.id);
+    broadcast('agent_action', agentAction);
+  } else if (action === 'broadcast_alert' && decision.dispatchMessage) {
+    const agentAction = {
+      id: randomUUID(), decisionId: decision.id, timestamp: now,
+      type: 'broadcast_alert',
+      content: decision.dispatchMessage,
+    };
+    saveAgentAction(agentAction);
+    createIncident(agentAction.id);
+    broadcast('agent_action', agentAction);
+  } else if (action === 'call_police') {
+    const agentAction = {
+      id: randomUUID(), decisionId: decision.id, timestamp: now,
+      type: 'call_police',
+      content: decision.reasoning,
+    };
+    saveAgentAction(agentAction);
+    createIncident(agentAction.id);
+    broadcast('agent_action', agentAction);
+  } else if (action === 'dispatch_robot' && decision.dispatchRobotId && decision.dispatchMessage) {
+    const targetRobot = robotState.get(decision.dispatchRobotId);
+    const agentAction = {
+      id: randomUUID(), decisionId: decision.id, timestamp: now,
+      type: 'dispatch_robot',
+      guardId: decision.dispatchRobotId,
+      guardName: targetRobot?.profile?.name ?? decision.dispatchRobotId,
+      content: decision.dispatchMessage,
+    };
+    saveAgentAction(agentAction);
+    createIncident(agentAction.id);
+    broadcast('agent_action', agentAction);
+  } else if (action === 'dispatch_robot' || action === 'investigate') {
+    const agentAction = {
+      id: randomUUID(), decisionId: decision.id, timestamp: now,
+      type: action,
+      content: decision.reasoning,
+    };
+    saveAgentAction(agentAction);
+    createIncident(agentAction.id);
+    broadcast('agent_action', agentAction);
+  }
+};
+
+// --- robot dispatch ---
+
+const dispatchRobot = (event: RobotGpsEvent | RobotTelemetryEvent | RobotAlertEvent) => {
+  const state = getRobotState(event.robotId);
+  const sState = state.shiftId ? shiftState.get(state.shiftId) ?? null : null;
+
+  const availableGuards = [...guardState.entries()]
+    .map(([id, gs]) => ({
+      id,
+      name: gs.profile?.name ?? id,
+      role: gs.profile?.role ?? 'unknown',
+      lastKnownZone: gs.lastGps?.location.label ?? null,
+    }));
+
+  const context: RobotContext = {
+    lastGps: state.lastGps,
+    recentTelemetry: state.recentTelemetry,
+    profile: state.profile,
+    shiftGoal: state.shiftGoal,
+    venueName: state.venueName,
+    venueType: state.venueType,
+    expectedActivity: state.expectedActivity,
+    currentMemo: state.currentMemo,
+    shiftMemo: sState?.shiftMemo ?? null,
+    venueHistory: sState?.venueHistory ?? [],
+    availableGuards,
+  };
+
+  analyzeRobotEvent(event, context)
+    .then(decision => {
+      if (!decision) return;
+      saveDecision(decision);
+      broadcast('decision', decision);
+
+      const now = new Date().toISOString();
+
+      if (decision.memo && state.shiftId) {
+        state.currentMemo = decision.memo;
+        state.memoUpdatedAt = now;
+        saveRobotMemo(event.robotId, state.shiftId, decision.memo, now);
+        broadcast('memo', { guardId: event.robotId, shiftId: state.shiftId, content: decision.memo, updatedAt: now });
+      }
+
+      if (decision.shiftMemo && state.shiftId && sState) {
+        sState.shiftMemo = decision.shiftMemo;
+        sState.shiftMemoUpdatedAt = now;
+        saveShiftMemo(state.shiftId, decision.shiftMemo, now);
+        broadcast('shift_memo', { shiftId: state.shiftId, content: decision.shiftMemo, updatedAt: now });
+      }
+
+      if (decision.venueNote && decision.priority >= 4 && state.shiftId && sState) {
+        const noteId = randomUUID();
+        appendVenueNote(noteId, sState.locationId, decision.venueNote, now);
+        sState.venueHistory = [decision.venueNote, ...sState.venueHistory].slice(0, 5);
+        broadcast('venue_note', { id: noteId, locationId: sState.locationId, content: decision.venueNote, occurredAt: now });
+      }
+
+      executeAction(decision, sState, now);
+    })
+    .catch(err => app.log.error({ err }, 'Robot agent analysis failed'));
 };
 
 // --- event handlers ---
@@ -215,6 +329,28 @@ simulator.on('panic', (event: PanicEvent) => {
   dispatch(event);
 });
 
+simulator.on('robot_gps', (event: RobotGpsEvent) => {
+  saveRobotEvent(event);
+  broadcast('robot_gps', event);
+  getRobotState(event.robotId).lastGps = event;
+});
+
+simulator.on('robot_telemetry', (event: RobotTelemetryEvent) => {
+  saveRobotEvent(event);
+  broadcast('robot_telemetry', event);
+
+  const state = getRobotState(event.robotId);
+  state.recentTelemetry = [event, ...state.recentTelemetry].slice(0, 3);
+
+  if (event.batteryPct < 20 || event.status === 'fault') dispatchRobot(event);
+});
+
+simulator.on('robot_alert', (event: RobotAlertEvent) => {
+  saveRobotEvent(event);
+  broadcast('robot_alert', event);
+  dispatchRobot(event);
+});
+
 // --- SSE route ---
 
 app.get('/events', (req, reply) => {
@@ -244,6 +380,9 @@ app.get('/memos', () => {
   const result: Record<string, { content: string; updatedAt: string }> = {};
   for (const [guardId, state] of guardState.entries()) {
     if (state.currentMemo) result[guardId] = { content: state.currentMemo, updatedAt: state.memoUpdatedAt ?? '' };
+  }
+  for (const [robotId, state] of robotState.entries()) {
+    if (state.currentMemo) result[robotId] = { content: state.currentMemo, updatedAt: state.memoUpdatedAt ?? '' };
   }
   return result;
 });
@@ -316,7 +455,48 @@ app.post('/sim/resume', () => { resumeSimulator(); return { paused: false }; });
 
 app.post('/sim/event', (req) => {
   const body = req.body as Record<string, unknown>;
-  const { type, guardId } = body as { type: string; guardId: string };
+  const { type } = body as { type: string };
+
+  if (type === 'robot_gps' || type === 'robot_telemetry' || type === 'robot_alert') {
+    const { robotId } = body as { robotId: string };
+    const state = robotState.get(robotId);
+    if (!state) return { error: 'Unknown robot' };
+
+    const shift = loadedShifts.find(s => s.id === state.shiftId);
+    if (!shift) return { error: 'Robot has no active shift' };
+
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    const name = state.profile?.name ?? robotId;
+
+    if (type === 'robot_gps') {
+      const zone = shift.zones.find(z => z.id === (body.zoneId as string)) ?? shift.zones[0];
+      simulator.emit('robot_gps', {
+        id, type: 'robot_gps', timestamp: now,
+        robotId, robotName: name, shiftId: state.shiftId, venueName: state.venueName,
+        location: { label: zone.label, lat: zone.lat, lng: zone.lng, sensitivity: zone.sensitivity },
+        outOfHours: false,
+      });
+    } else if (type === 'robot_telemetry') {
+      simulator.emit('robot_telemetry', {
+        id, type: 'robot_telemetry', timestamp: now,
+        robotId, robotName: name, shiftId: state.shiftId, venueName: state.venueName,
+        batteryPct: body.batteryPct as number,
+        status: body.status as RobotTelemetryEvent['status'],
+      });
+    } else {
+      simulator.emit('robot_alert', {
+        id, type: 'robot_alert', timestamp: now,
+        robotId, robotName: name, shiftId: state.shiftId, venueName: state.venueName,
+        content: body.content as string,
+        alertType: (body.alertType as RobotAlertEvent['alertType']) ?? 'status_update',
+      });
+    }
+
+    return { ok: true };
+  }
+
+  const { guardId } = body as { guardId: string };
 
   const state = guardState.get(guardId);
   if (!state) return { error: 'Unknown guard' };
@@ -395,6 +575,23 @@ for (const shift of loadedShifts) {
       lastGps: null,
       recentWearable: [],
       profile: guard,
+      shiftGoal: shift.goal,
+      venueName: shift.venueName,
+      venueType: shift.venueType,
+      expectedActivity: shift.expectedActivity,
+      currentMemo: saved?.content ?? null,
+      memoUpdatedAt: saved?.updatedAt ?? null,
+      shiftId: shift.id,
+    });
+  }
+
+  const robotMemos = loadRobotMemos(shift.id);
+  for (const robot of shift.robots) {
+    const saved = robotMemos.get(robot.id);
+    robotState.set(robot.id, {
+      lastGps: null,
+      recentTelemetry: [],
+      profile: robot,
       shiftGoal: shift.goal,
       venueName: shift.venueName,
       venueType: shift.venueType,

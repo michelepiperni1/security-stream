@@ -3,13 +3,13 @@ import { useEffect, useMemo, useRef } from 'react';
 import L from 'leaflet';
 import { MapContainer, TileLayer, Marker, Tooltip, ZoomControl, useMap } from 'react-leaflet';
 import type { ShiftInfo, SecurityEvent } from '@/types';
-import { buildGuardStatusMap, getAlertLevel, ALERT_HEX } from '@/lib/guardAlertLevel';
+import { buildGuardStatusMap, getAlertLevel, ALERT_HEX, buildRobotStatusMap, getRobotAlertLevel } from '@/lib/guardAlertLevel';
 
 interface Props {
   events: SecurityEvent[];
   shift: ShiftInfo | null;
-  selectedGuardId: string | null;
-  onSelectGuard: (id: string | null) => void;
+  selectedUnitId: string | null;
+  onSelectUnit: (id: string | null) => void;
 }
 
 interface GuardPosition {
@@ -21,6 +21,18 @@ interface GuardPosition {
   level: 'normal' | 'elevated' | 'critical';
   lastZone: string | null;
   lastHr: number | null;
+}
+
+interface RobotPosition {
+  robotId: string;
+  robotName: string;
+  model: string;
+  lat: number;
+  lng: number;
+  level: 'normal' | 'elevated' | 'critical';
+  lastZone: string | null;
+  batteryPct: number | null;
+  status: 'patrolling' | 'charging' | 'idle' | 'fault' | null;
 }
 
 const makeGuardIcon = (
@@ -61,6 +73,51 @@ const makeGuardIcon = (
         color:#1e293b;text-shadow:0 0 4px rgba(255,255,255,0.9),0 0 4px rgba(255,255,255,0.9);
         pointer-events:none;letter-spacing:0.01em;
       ">${firstName}</div>
+    `,
+  });
+};
+
+const makeRobotIcon = (
+  level: RobotPosition['level'],
+  robotName: string,
+  selected: boolean,
+): L.DivIcon => {
+  const color = ALERT_HEX[level];
+  const ring = selected
+    ? `outline: 2.5px solid #f1f5f9; outline-offset: 2px;`
+    : '';
+  const pulse = level === 'critical'
+    ? `animation: guard-pulse 1s ease-in-out infinite alternate;`
+    : '';
+  return L.divIcon({
+    className: '',
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    tooltipAnchor: [0, -16],
+    html: `
+      <div style="
+        width:28px;height:28px;border-radius:6px;
+        background:${color};border:2px solid rgba(255,255,255,0.25);
+        display:flex;align-items:center;justify-content:center;
+        cursor:pointer;position:relative;${ring}${pulse}
+      ">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+          fill="none" stroke="white" stroke-width="2.5"
+          stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 8V4H8"/>
+          <rect width="16" height="12" x="4" y="8" rx="2"/>
+          <path d="M2 14h2"/>
+          <path d="M20 14h2"/>
+          <path d="M15 13v2"/>
+          <path d="M9 13v2"/>
+        </svg>
+      </div>
+      <div style="
+        position:absolute;top:31px;left:50%;transform:translateX(-50%);
+        white-space:nowrap;font-size:10px;font-weight:700;
+        color:#1e293b;text-shadow:0 0 4px rgba(255,255,255,0.9),0 0 4px rgba(255,255,255,0.9);
+        pointer-events:none;letter-spacing:0.01em;
+      ">${robotName}</div>
     `,
   });
 };
@@ -107,7 +164,7 @@ const BoundsController = ({ positions }: { positions: Array<{ lat: number; lng: 
 
 const FALLBACK_CENTER: L.LatLngTuple = [52.5110, 13.4428];
 
-const MapView = ({ events, shift, selectedGuardId, onSelectGuard }: Props) => {
+const MapView = ({ events, shift, selectedUnitId, onSelectUnit }: Props) => {
   const guardPositions = useMemo((): GuardPosition[] => {
     if (!shift) return [];
     const statusMap = buildGuardStatusMap(shift.guards.map(g => g.id), events);
@@ -131,13 +188,48 @@ const MapView = ({ events, shift, selectedGuardId, onSelectGuard }: Props) => {
     () => new Map(
       guardPositions.map(p => [
         p.guardId,
-        makeGuardIcon(p.level, p.guardName, selectedGuardId === p.guardId),
+        makeGuardIcon(p.level, p.guardName, selectedUnitId === p.guardId),
       ]),
     ),
-    [guardPositions, selectedGuardId],
+    [guardPositions, selectedUnitId],
   );
 
-  const hasPositions = guardPositions.length > 0;
+  const robotPositions = useMemo((): RobotPosition[] => {
+    if (!shift) return [];
+    const statusMap = buildRobotStatusMap(shift.robots.map(r => r.id), events);
+    return shift.robots.flatMap(r => {
+      const s = statusMap.get(r.id)!;
+      if (s.lastLat === null || s.lastLng === null) return [];
+      return [{
+        robotId: r.id,
+        robotName: r.name,
+        model: r.model,
+        lat: s.lastLat,
+        lng: s.lastLng,
+        level: getRobotAlertLevel(s),
+        lastZone: s.lastZone,
+        batteryPct: s.batteryPct,
+        status: s.status,
+      }];
+    });
+  }, [shift, events]);
+
+  const robotIcons = useMemo(
+    () => new Map(
+      robotPositions.map(p => [
+        p.robotId,
+        makeRobotIcon(p.level, p.robotName, selectedUnitId === p.robotId),
+      ]),
+    ),
+    [robotPositions, selectedUnitId],
+  );
+
+  const allPositions = useMemo(
+    () => [...guardPositions, ...robotPositions],
+    [guardPositions, robotPositions],
+  );
+
+  const hasPositions = allPositions.length > 0;
 
   return (
     <div className="relative h-full w-full dark-map overflow-hidden">
@@ -164,7 +256,7 @@ const MapView = ({ events, shift, selectedGuardId, onSelectGuard }: Props) => {
         <ZoomControl position="bottomright" />
 
         <MapResizer />
-        <BoundsController positions={guardPositions} />
+        <BoundsController positions={allPositions} />
 
         {/* Zone reference markers */}
         {shift?.zones.map(zone => (
@@ -192,7 +284,7 @@ const MapView = ({ events, shift, selectedGuardId, onSelectGuard }: Props) => {
             position={[p.lat, p.lng]}
             icon={guardIcons.get(p.guardId)!}
             eventHandlers={{
-              click: () => onSelectGuard(selectedGuardId === p.guardId ? null : p.guardId),
+              click: () => onSelectUnit(selectedUnitId === p.guardId ? null : p.guardId),
             }}
           >
             <Tooltip direction="top" offset={[0, -16]}>
@@ -200,6 +292,26 @@ const MapView = ({ events, shift, selectedGuardId, onSelectGuard }: Props) => {
                 <div style={{ fontWeight: 600, marginBottom: 2 }}>{p.guardName}</div>
                 {p.lastZone && <div>{p.lastZone}</div>}
                 {p.lastHr   && <div>HR {p.lastHr} bpm · {p.level}</div>}
+              </div>
+            </Tooltip>
+          </Marker>
+        ))}
+
+        {/* Robot markers */}
+        {robotPositions.map(p => (
+          <Marker
+            key={p.robotId}
+            position={[p.lat, p.lng]}
+            icon={robotIcons.get(p.robotId)!}
+            eventHandlers={{
+              click: () => onSelectUnit(selectedUnitId === p.robotId ? null : p.robotId),
+            }}
+          >
+            <Tooltip direction="top" offset={[0, -16]}>
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 2 }}>{p.robotName}</div>
+                {p.lastZone && <div>{p.lastZone}</div>}
+                {p.batteryPct !== null && <div>{p.batteryPct}% · {p.status}</div>}
               </div>
             </Tooltip>
           </Marker>

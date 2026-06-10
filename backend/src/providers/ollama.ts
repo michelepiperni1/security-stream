@@ -15,7 +15,8 @@ Respond with ONLY a JSON object — no markdown, no explanation. Schema:
   "shift_memo": <string, 1-2 sentence snapshot of overall shift state across all guards>,
   "venue_note": <string or null, 1 sentence about a noteworthy incident for venue history — only include if priority >= 4, otherwise null>,
   "dispatch_guard_id": <string or null, the ID of the guard to message when action is "message_guard">,
-  "dispatch_message": <string or null, the message to send to the guard(s) when action is "message_guard" or "broadcast_alert">
+  "dispatch_robot_id": <string or null, the ID of the robot to redirect when action is "dispatch_robot">,
+  "dispatch_message": <string or null, the message to send when action is "message_guard", "broadcast_alert", or "dispatch_robot">
 }`;
 
 export class OllamaProvider implements LLMProvider {
@@ -57,6 +58,7 @@ export class OllamaProvider implements LLMProvider {
       shift_memo?: string;
       venue_note?: string;
       dispatch_guard_id?: string;
+      dispatch_robot_id?: string;
       dispatch_message?: string;
     };
 
@@ -70,6 +72,7 @@ export class OllamaProvider implements LLMProvider {
       shiftMemo: parsed.shift_memo,
       venueNote: parsed.venue_note ?? undefined,
       dispatchGuardId: parsed.dispatch_guard_id ?? undefined,
+      dispatchRobotId: parsed.dispatch_robot_id ?? undefined,
       dispatchMessage: parsed.dispatch_message ?? undefined,
     };
   }

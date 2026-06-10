@@ -1,13 +1,13 @@
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
-import type { GpsEvent, WearableEvent, GuardMessage, PanicEvent } from './events.js';
+import type { GpsEvent, WearableEvent, GuardMessage, PanicEvent, RobotGpsEvent, RobotTelemetryEvent, RobotAlertEvent } from './events.js';
 import type { Zone, LoadedShift } from './db.js';
 
-export type { GpsEvent, WearableEvent, GuardMessage, PanicEvent, SecurityEvent } from './events.js';
+export type { GpsEvent, WearableEvent, GuardMessage, PanicEvent, RobotGpsEvent, RobotTelemetryEvent, RobotAlertEvent, SecurityEvent } from './events.js';
 
 export const simulator = new EventEmitter();
 
-let paused = false;
+let paused = true;
 export const pauseSimulator = () => { paused = true; };
 export const resumeSimulator = () => { paused = false; };
 export const isSimulatorPaused = () => paused;
@@ -66,6 +66,49 @@ const pickMessage = (alertness: number, location: string): Pick<GuardMessage, 'c
       `All clear, continuing patrol`,
     ]),
     messageType: 'status_update',
+  };
+};
+
+// --- robot alert templates ---
+
+const pickRobotAlert = (anomalyLevel: number, location: string): Pick<RobotAlertEvent, 'content' | 'alertType'> => {
+  if (anomalyLevel > 0.7 && Math.random() < 0.15) {
+    return {
+      content: pick([
+        `System fault detected — sensor array offline near ${location}`,
+        `Critical error — navigation module unresponsive near ${location}`,
+        `Self-diagnostic failure at ${location}`,
+      ]),
+      alertType: 'system_fault',
+    };
+  }
+  if (anomalyLevel > 0.5) {
+    return {
+      content: pick([
+        `Perimeter breach detected near ${location}`,
+        `Unidentified motion detected at ${location}`,
+        `Thermal anomaly flagged at ${location}`,
+        `Camera feed obstructed at ${location}`,
+      ]),
+      alertType: pick(['perimeter_breach', 'motion_detected', 'thermal_anomaly', 'camera_obstruction']),
+    };
+  }
+  if (anomalyLevel > 0.25) {
+    return {
+      content: pick([
+        `Motion detected at ${location} — verifying`,
+        `Minor thermal variance at ${location}`,
+      ]),
+      alertType: pick(['motion_detected', 'thermal_anomaly']),
+    };
+  }
+  return {
+    content: pick([
+      `Patrol checkpoint reached — ${location}`,
+      `Sector clear — ${location}`,
+      `All sensors nominal — ${location}`,
+    ]),
+    alertType: 'status_update',
   };
 };
 
@@ -197,6 +240,114 @@ const startGuard = (state: GuardSimState): void => {
   setTimeout(slowTick, 8000 + Math.random() * 8000);
 };
 
+// --- robot simulation state ---
+
+interface RobotSimState {
+  id: string;
+  name: string;
+  shiftId: string;
+  venueName: string;
+  zones: Zone[];
+  currentZoneIndex: number;
+  batteryPct: number;
+  status: RobotTelemetryEvent['status'];
+  anomalyLevel: number;
+  anomalyTicksRemaining: number;
+}
+
+const startRobot = (state: RobotSimState): void => {
+  // GPS — ~6s per tick, sequential patrol loop
+  const robotGpsTick = () => {
+    if (!paused && state.status === 'patrolling') {
+      state.currentZoneIndex = (state.currentZoneIndex + 1) % state.zones.length;
+      const z = state.zones[state.currentZoneIndex];
+      simulator.emit('robot_gps', {
+        id: randomUUID(),
+        type: 'robot_gps',
+        timestamp: new Date().toISOString(),
+        robotId: state.id,
+        robotName: state.name,
+        shiftId: state.shiftId,
+        venueName: state.venueName,
+        location: {
+          label: z.label,
+          lat: jitter(z.lat, 0.0003),
+          lng: jitter(z.lng, 0.0003),
+          sensitivity: z.sensitivity,
+        },
+        outOfHours: isOutOfHours(z),
+      } satisfies RobotGpsEvent);
+    }
+    setTimeout(robotGpsTick, 6000 * (0.7 + Math.random() * 0.6));
+  };
+
+  // Telemetry — ~4s per tick: battery drain/charge + status transitions
+  const robotTelemetryTick = () => {
+    if (!paused) {
+      if (state.status === 'patrolling') {
+        state.batteryPct = Math.max(0, state.batteryPct - 1);
+        if (state.batteryPct < 20) state.status = 'charging';
+        else if (Math.random() < 0.005) state.status = 'fault';
+      } else if (state.status === 'charging') {
+        state.batteryPct = Math.min(100, state.batteryPct + 2);
+        if (state.batteryPct >= 95) state.status = 'patrolling';
+      } else if (state.status === 'fault') {
+        if (Math.random() < 0.3) state.status = 'patrolling';
+      }
+
+      simulator.emit('robot_telemetry', {
+        id: randomUUID(),
+        type: 'robot_telemetry',
+        timestamp: new Date().toISOString(),
+        robotId: state.id,
+        robotName: state.name,
+        shiftId: state.shiftId,
+        venueName: state.venueName,
+        batteryPct: state.batteryPct,
+        status: state.status,
+      } satisfies RobotTelemetryEvent);
+    }
+    setTimeout(robotTelemetryTick, 4000 * (0.7 + Math.random() * 0.6));
+  };
+
+  // Slow tick — ~25s: anomaly management + alert events
+  const robotSlowTick = () => {
+    if (state.anomalyTicksRemaining > 0) {
+      state.anomalyTicksRemaining--;
+    } else if (state.anomalyLevel > 0.05) {
+      state.anomalyLevel *= 0.5;
+    } else if (Math.random() < 0.1) {
+      state.anomalyLevel = 0.4 + Math.random() * 0.6;
+      state.anomalyTicksRemaining = randInt(1, 3);
+    }
+
+    if (!paused) {
+      const z = state.zones[state.currentZoneIndex];
+      const alertChance = state.anomalyLevel > 0.5 ? 0.6 : 0.35;
+      if (Math.random() < alertChance) {
+        const { content, alertType } = pickRobotAlert(state.anomalyLevel, z.label);
+        simulator.emit('robot_alert', {
+          id: randomUUID(),
+          type: 'robot_alert',
+          timestamp: new Date().toISOString(),
+          robotId: state.id,
+          robotName: state.name,
+          shiftId: state.shiftId,
+          venueName: state.venueName,
+          content,
+          alertType,
+        } satisfies RobotAlertEvent);
+      }
+    }
+
+    setTimeout(robotSlowTick, 25000 * (0.6 + Math.random() * 0.8));
+  };
+
+  setTimeout(robotGpsTick, Math.random() * 2000);
+  setTimeout(robotTelemetryTick, Math.random() * 1500);
+  setTimeout(robotSlowTick, 8000 + Math.random() * 8000);
+};
+
 export const start = (shifts: LoadedShift[]): void => {
   for (const shift of shifts) {
     for (const guard of shift.guards) {
@@ -210,6 +361,21 @@ export const start = (shifts: LoadedShift[]): void => {
         alertness: 0,
         alertnessTicksRemaining: 0,
         batteryPct: randInt(60, 100),
+      });
+    }
+
+    for (const robot of shift.robots) {
+      startRobot({
+        id: robot.id,
+        name: robot.name,
+        shiftId: shift.id,
+        venueName: shift.venueName,
+        zones: shift.zones,
+        currentZoneIndex: Math.max(0, robot.startingZoneIndex),
+        batteryPct: randInt(70, 100),
+        status: 'patrolling',
+        anomalyLevel: 0,
+        anomalyTicksRemaining: 0,
       });
     }
   }

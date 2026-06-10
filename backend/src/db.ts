@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import type { SecurityEvent, GpsEvent, WearableEvent, GuardMessage, PanicEvent } from './events.js';
+import type { SecurityEvent, GpsEvent, WearableEvent, GuardMessage, PanicEvent, RobotGpsEvent, RobotTelemetryEvent, RobotAlertEvent } from './events.js';
 import type { ScenarioData } from './seed.js';
 
 const dataDir = join(dirname(fileURLToPath(import.meta.url)), '../data');
@@ -99,7 +99,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS decisions (
     id         TEXT PRIMARY KEY,
-    event_id   TEXT NOT NULL REFERENCES events(id),
+    event_id   TEXT NOT NULL,
     timestamp  TEXT NOT NULL,
     priority   INTEGER NOT NULL,
     action     TEXT NOT NULL,
@@ -147,6 +147,61 @@ db.exec(`
     outcome_notes   TEXT,
     resolved_at     TEXT
   );
+
+  -- Robot entity tables
+  CREATE TABLE IF NOT EXISTS robots (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    model      TEXT NOT NULL,
+    capability TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS shift_robots (
+    shift_id         TEXT NOT NULL REFERENCES shifts(id),
+    robot_id         TEXT NOT NULL REFERENCES robots(id),
+    starting_zone_id TEXT NOT NULL REFERENCES location_zones(id),
+    PRIMARY KEY (shift_id, robot_id)
+  );
+
+  -- Robot event stream tables
+  CREATE TABLE IF NOT EXISTS robot_events (
+    id         TEXT PRIMARY KEY,
+    type       TEXT NOT NULL,
+    robot_id   TEXT NOT NULL,
+    robot_name TEXT NOT NULL,
+    shift_id   TEXT NOT NULL,
+    venue_name TEXT NOT NULL,
+    timestamp  TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS robot_gps_events (
+    event_id       TEXT PRIMARY KEY REFERENCES robot_events(id),
+    lat            REAL NOT NULL,
+    lng            REAL NOT NULL,
+    location_label TEXT NOT NULL,
+    sensitivity    TEXT NOT NULL,
+    out_of_hours   INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS robot_telemetry_events (
+    event_id    TEXT PRIMARY KEY REFERENCES robot_events(id),
+    battery_pct INTEGER NOT NULL,
+    status      TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS robot_alert_events (
+    event_id   TEXT PRIMARY KEY REFERENCES robot_events(id),
+    content    TEXT NOT NULL,
+    alert_type TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS robot_memos (
+    robot_id   TEXT NOT NULL,
+    shift_id   TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (robot_id, shift_id)
+  );
 `);
 
 // --- entity types ---
@@ -171,6 +226,14 @@ export interface GuardProfile {
   startingZoneIndex: number;
 }
 
+export interface RobotProfile {
+  id: string;
+  name: string;
+  model: string;
+  capability: string;
+  startingZoneIndex: number;
+}
+
 export interface LoadedShift {
   id: string;
   locationId: string;
@@ -183,6 +246,7 @@ export interface LoadedShift {
   expectedActivity: string;
   zones: Zone[];
   guards: GuardProfile[];
+  robots: RobotProfile[];
 }
 
 // --- decision type ---
@@ -252,7 +316,18 @@ export const seedIfEmpty = (data: ScenarioData): void => {
       .run(sg.shiftId, sg.guardId, sg.startingZoneId);
   }
 
-  console.log(`[${scenarioName}] Seeded ${data.guards.length} guards across ${data.shifts.length} shift(s) at ${data.locations.length} venue(s)`);
+  for (const r of data.robots ?? []) {
+    db.prepare(`INSERT INTO robots (id, name, model, capability) VALUES (?, ?, ?, ?)`)
+      .run(r.id, r.name, r.model, r.capability);
+  }
+
+  for (const sr of data.shiftRobots ?? []) {
+    db.prepare(`INSERT INTO shift_robots (shift_id, robot_id, starting_zone_id) VALUES (?, ?, ?)`)
+      .run(sr.shiftId, sr.robotId, sr.startingZoneId);
+  }
+
+  const robotSummary = data.robots?.length ? ` and ${data.robots.length} robot(s)` : '';
+  console.log(`[${scenarioName}] Seeded ${data.guards.length} guards${robotSummary} across ${data.shifts.length} shift(s) at ${data.locations.length} venue(s)`);
 };
 
 // --- load active shifts ---
@@ -302,6 +377,23 @@ export const loadActiveShifts = (): LoadedShift[] => {
       startingZoneIndex: zones.findIndex(z => z.id === g.starting_zone_id),
     }));
 
+    const robotRows = db.prepare(`
+      SELECT r.id, r.name, r.model, r.capability, sr.starting_zone_id
+      FROM robots r
+      JOIN shift_robots sr ON sr.robot_id = r.id
+      WHERE sr.shift_id = ?
+    `).all(shift.id) as Array<{
+      id: string; name: string; model: string; capability: string; starting_zone_id: string;
+    }>;
+
+    const robots: RobotProfile[] = robotRows.map(r => ({
+      id: r.id,
+      name: r.name,
+      model: r.model,
+      capability: r.capability,
+      startingZoneIndex: zones.findIndex(z => z.id === r.starting_zone_id),
+    }));
+
     return {
       id: shift.id,
       locationId: shift.location_id,
@@ -322,6 +414,7 @@ export const loadActiveShifts = (): LoadedShift[] => {
         authorizedHoursEnd: z.authorized_hours_end,
       })),
       guards,
+      robots,
     };
   });
 };
@@ -358,13 +451,35 @@ const insertDecision = db.prepare(`
   VALUES (:id, :eventId, :timestamp, :priority, :action, :reasoning, :confidence)
 `);
 
-const baseFields = (event: SecurityEvent) => ({
+const insertRobotBase = db.prepare(`
+  INSERT OR IGNORE INTO robot_events (id, type, robot_id, robot_name, shift_id, venue_name, timestamp)
+  VALUES (:id, :type, :robotId, :robotName, :shiftId, :venueName, :timestamp)
+`);
+
+const insertRobotGps = db.prepare(`
+  INSERT OR IGNORE INTO robot_gps_events (event_id, lat, lng, location_label, sensitivity, out_of_hours)
+  VALUES (:eventId, :lat, :lng, :locationLabel, :sensitivity, :outOfHours)
+`);
+
+const insertRobotTelemetry = db.prepare(`
+  INSERT OR IGNORE INTO robot_telemetry_events (event_id, battery_pct, status)
+  VALUES (:eventId, :batteryPct, :status)
+`);
+
+const insertRobotAlert = db.prepare(`
+  INSERT OR IGNORE INTO robot_alert_events (event_id, content, alert_type)
+  VALUES (:eventId, :content, :alertType)
+`);
+
+type GuardEvent = GpsEvent | WearableEvent | GuardMessage | PanicEvent;
+
+const baseFields = (event: GuardEvent) => ({
   id: event.id, type: event.type, guardId: event.guardId,
   guardName: event.guardName, shiftId: event.shiftId,
   venueName: event.venueName, timestamp: event.timestamp,
 });
 
-export const saveEvent = (event: SecurityEvent): void => {
+export const saveEvent = (event: GuardEvent): void => {
   insertBase.run(baseFields(event));
 
   if (event.type === 'gps') {
@@ -379,6 +494,24 @@ export const saveEvent = (event: SecurityEvent): void => {
   } else if (event.type === 'panic') {
     const e = event as PanicEvent;
     insertPanic.run({ eventId: e.id, lat: e.location.lat, lng: e.location.lng, locationLabel: e.location.label });
+  }
+};
+
+const robotBaseFields = (event: RobotGpsEvent | RobotTelemetryEvent | RobotAlertEvent) => ({
+  id: event.id, type: event.type, robotId: event.robotId,
+  robotName: event.robotName, shiftId: event.shiftId,
+  venueName: event.venueName, timestamp: event.timestamp,
+});
+
+export const saveRobotEvent = (event: RobotGpsEvent | RobotTelemetryEvent | RobotAlertEvent): void => {
+  insertRobotBase.run(robotBaseFields(event));
+
+  if (event.type === 'robot_gps') {
+    insertRobotGps.run({ eventId: event.id, lat: event.location.lat, lng: event.location.lng, locationLabel: event.location.label, sensitivity: event.location.sensitivity, outOfHours: event.outOfHours ? 1 : 0 });
+  } else if (event.type === 'robot_telemetry') {
+    insertRobotTelemetry.run({ eventId: event.id, batteryPct: event.batteryPct, status: event.status });
+  } else if (event.type === 'robot_alert') {
+    insertRobotAlert.run({ eventId: event.id, content: event.content, alertType: event.alertType });
   }
 };
 
@@ -398,6 +531,21 @@ export const loadGuardMemos = (shiftId: string): Map<string, { content: string; 
   const rows = db.prepare(`SELECT guard_id, content, updated_at FROM guard_memos WHERE shift_id = ?`).all(shiftId) as Array<{ guard_id: string; content: string; updated_at: string }>;
   const map = new Map<string, { content: string; updatedAt: string }>();
   for (const row of rows) map.set(row.guard_id, { content: row.content, updatedAt: row.updated_at });
+  return map;
+};
+
+export const saveRobotMemo = (robotId: string, shiftId: string, content: string, updatedAt: string): void => {
+  db.prepare(`
+    INSERT INTO robot_memos (robot_id, shift_id, content, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT (robot_id, shift_id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at
+  `).run(robotId, shiftId, content, updatedAt);
+};
+
+export const loadRobotMemos = (shiftId: string): Map<string, { content: string; updatedAt: string }> => {
+  const rows = db.prepare(`SELECT robot_id, content, updated_at FROM robot_memos WHERE shift_id = ?`).all(shiftId) as Array<{ robot_id: string; content: string; updated_at: string }>;
+  const map = new Map<string, { content: string; updatedAt: string }>();
+  for (const row of rows) map.set(row.robot_id, { content: row.content, updatedAt: row.updated_at });
   return map;
 };
 
@@ -498,7 +646,7 @@ const rowToEvent = (row: HistoryRow): SecurityEvent => {
   return { ...base, type: 'panic', location: { label: row.p_location_label!, lat: row.p_lat!, lng: row.p_lng! } } as PanicEvent;
 };
 
-export const getRecentHistory = (limit = 100): { event: SecurityEvent; decision: Decision | null }[] => {
+const getRecentGuardHistory = (limit: number): { event: SecurityEvent; decision: Decision | null }[] => {
   const rows = db.prepare(`
     SELECT e.id, e.type, e.guard_id, e.guard_name, e.shift_id, e.venue_name, e.timestamp,
            g.lat, g.lng, g.location_label, g.sensitivity, g.out_of_hours,
@@ -526,4 +674,57 @@ export const getRecentHistory = (limit = 100): { event: SecurityEvent; decision:
       reasoning: row.d_reasoning!, confidence: row.d_confidence!,
     } : null,
   }));
+};
+
+type RobotHistoryRow = {
+  id: string; type: string; robot_id: string; robot_name: string;
+  shift_id: string; venue_name: string; timestamp: string;
+  lat: number | null; lng: number | null; location_label: string | null;
+  sensitivity: string | null; out_of_hours: number | null;
+  battery_pct: number | null; status: string | null;
+  content: string | null; alert_type: string | null;
+  d_id: string | null; d_event_id: string | null; d_ts: string | null;
+  d_priority: number | null; d_action: string | null;
+  d_reasoning: string | null; d_confidence: number | null;
+};
+
+const robotRowToEvent = (row: RobotHistoryRow): SecurityEvent => {
+  const base = { id: row.id, robotId: row.robot_id, robotName: row.robot_name, shiftId: row.shift_id, venueName: row.venue_name, timestamp: row.timestamp };
+  if (row.type === 'robot_gps')       return { ...base, type: 'robot_gps', location: { label: row.location_label!, lat: row.lat!, lng: row.lng!, sensitivity: row.sensitivity! }, outOfHours: row.out_of_hours === 1 } as RobotGpsEvent;
+  if (row.type === 'robot_telemetry') return { ...base, type: 'robot_telemetry', batteryPct: row.battery_pct!, status: row.status as RobotTelemetryEvent['status'] } as RobotTelemetryEvent;
+  return { ...base, type: 'robot_alert', content: row.content!, alertType: row.alert_type as RobotAlertEvent['alertType'] } as RobotAlertEvent;
+};
+
+const getRecentRobotHistory = (limit: number): { event: SecurityEvent; decision: Decision | null }[] => {
+  const rows = db.prepare(`
+    SELECT e.id, e.type, e.robot_id, e.robot_name, e.shift_id, e.venue_name, e.timestamp,
+           g.lat, g.lng, g.location_label, g.sensitivity, g.out_of_hours,
+           t.battery_pct, t.status,
+           a.content, a.alert_type,
+           d.id AS d_id, d.event_id AS d_event_id, d.timestamp AS d_ts,
+           d.priority AS d_priority, d.action AS d_action,
+           d.reasoning AS d_reasoning, d.confidence AS d_confidence
+    FROM robot_events e
+    LEFT JOIN robot_gps_events       g ON g.event_id = e.id
+    LEFT JOIN robot_telemetry_events t ON t.event_id = e.id
+    LEFT JOIN robot_alert_events     a ON a.event_id = e.id
+    LEFT JOIN decisions              d ON d.event_id = e.id
+    ORDER BY e.timestamp DESC
+    LIMIT :limit
+  `).all({ limit }) as RobotHistoryRow[];
+
+  return rows.map(row => ({
+    event: robotRowToEvent(row),
+    decision: row.d_id ? {
+      id: row.d_id, eventId: row.d_event_id!, timestamp: row.d_ts!,
+      priority: row.d_priority!, action: row.d_action as Decision['action'],
+      reasoning: row.d_reasoning!, confidence: row.d_confidence!,
+    } : null,
+  }));
+};
+
+export const getRecentHistory = (limit = 100): { event: SecurityEvent; decision: Decision | null }[] => {
+  const merged = [...getRecentGuardHistory(limit), ...getRecentRobotHistory(limit)];
+  merged.sort((a, b) => b.event.timestamp.localeCompare(a.event.timestamp));
+  return merged.slice(0, limit);
 };

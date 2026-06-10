@@ -6,7 +6,8 @@
     "start":              "tsx src/server.ts",
     "start:berghain":     "SCENARIO=berghain tsx src/server.ts",
     "start:festival":     "SCENARIO=festival tsx src/server.ts",
-    "start:construction": "SCENARIO=construction tsx src/server.ts"
+    "start:construction": "SCENARIO=construction tsx src/server.ts",
+    "start:warehouse":    "SCENARIO=warehouse tsx src/server.ts"
   },
   "devDependencies": {
     "@types/node": "^25.9.2",

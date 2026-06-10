@@ -43,12 +43,28 @@ export interface SeedShiftGuard {
   startingZoneId: string;
 }
 
+export interface SeedRobot {
+  id: string;
+  name: string;
+  model: string;
+  capability: string;
+  batteryCapacityPct: number;
+}
+
+export interface SeedShiftRobot {
+  shiftId: string;
+  robotId: string;
+  startingZoneId: string;
+}
+
 export interface ScenarioData {
   locations: SeedLocation[];
   zones: SeedZone[];
   guards: SeedGuard[];
   shifts: SeedShift[];
   shiftGuards: SeedShiftGuard[];
+  robots?: SeedRobot[];
+  shiftRobots?: SeedShiftRobot[];
 }
 
 // ─── Berghain Saturday Night ─────────────────────────────────────────────────
@@ -178,12 +194,62 @@ const construction: ScenarioData = {
   ],
 };
 
+// ─── Nordhafen Logistics Center — Overnight Hybrid Patrol ─────────────────────
+
+const warehouse: ScenarioData = {
+  locations: [
+    {
+      id: 'loc-nordhafen',
+      name: 'Nordhafen Logistics Center',
+      address: 'Industriestraße 47, 13509 Berlin, Germany',
+      type: 'warehouse',
+      capacity: 30,
+    },
+  ],
+  zones: [
+    { id: 'zone-w-gate',      locationId: 'loc-nordhafen', label: 'Main Gate',         lat: 52.59100, lng: 13.29700, sensitivity: 'public',     authorizedHoursStart: 0,  authorizedHoursEnd: 24 },
+    { id: 'zone-w-dockA',     locationId: 'loc-nordhafen', label: 'Loading Dock A',     lat: 52.59140, lng: 13.29750, sensitivity: 'controlled', authorizedHoursStart: 5,  authorizedHoursEnd: 22 },
+    { id: 'zone-w-dockB',     locationId: 'loc-nordhafen', label: 'Loading Dock B',     lat: 52.59150, lng: 13.29820, sensitivity: 'controlled', authorizedHoursStart: 5,  authorizedHoursEnd: 22 },
+    { id: 'zone-w-highvalue', locationId: 'loc-nordhafen', label: 'High-Value Storage', lat: 52.59080, lng: 13.29830, sensitivity: 'restricted', authorizedHoursStart: 0,  authorizedHoursEnd: 24 },
+    { id: 'zone-w-racking',   locationId: 'loc-nordhafen', label: 'Main Racking Floor', lat: 52.59060, lng: 13.29760, sensitivity: 'controlled', authorizedHoursStart: 0,  authorizedHoursEnd: 24 },
+    { id: 'zone-w-yard',      locationId: 'loc-nordhafen', label: 'Vehicle Yard',       lat: 52.59170, lng: 13.29680, sensitivity: 'public',     authorizedHoursStart: 0,  authorizedHoursEnd: 24 },
+    { id: 'zone-w-office',    locationId: 'loc-nordhafen', label: 'Site Office',        lat: 52.59110, lng: 13.29650, sensitivity: 'controlled', authorizedHoursStart: 5,  authorizedHoursEnd: 22 },
+  ],
+  guards: [
+    { id: 'guard-w-01', name: 'Jonas Weber',  gender: 'male',   experienceYears: 8, armed: false, role: 'patrol_supervisor' },
+    { id: 'guard-w-02', name: 'Amara Diallo', gender: 'female', experienceYears: 3, armed: false, role: 'patrol_guard'      },
+  ],
+  shifts: [
+    {
+      id: 'shift-warehouse-night',
+      locationId: 'loc-nordhafen',
+      goal: 'Overnight security for a 24/7 logistics center handling high-value electronics shipments. Two patrol guards work alongside two autonomous patrol robots covering the racking floor and high-value storage. Prevent unauthorized access to High-Value Storage outside scheduled pickups, monitor loading docks for unscheduled vehicle activity, respond to robot-flagged anomalies (motion, thermal, perimeter) by dispatching a guard to verify, and escalate any confirmed intrusion or robot system fault immediately.',
+      guardType: 'patrol',
+      expectedActivity: 'low',
+      active: true,
+    },
+  ],
+  shiftGuards: [
+    { shiftId: 'shift-warehouse-night', guardId: 'guard-w-01', startingZoneId: 'zone-w-gate'    },
+    { shiftId: 'shift-warehouse-night', guardId: 'guard-w-02', startingZoneId: 'zone-w-racking' },
+  ],
+  robots: [
+    { id: 'robot-w-01', name: 'Sentry-1', model: 'Knightscope K5',       capability: 'thermal_camera, motion_sensor, 360_camera',      batteryCapacityPct: 100 },
+    { id: 'robot-w-02', name: 'Sentry-2', model: 'Boston Dynamics Spot', capability: 'thermal_camera, agile_mobility, door_inspection', batteryCapacityPct: 100 },
+  ],
+  shiftRobots: [
+    { shiftId: 'shift-warehouse-night', robotId: 'robot-w-01', startingZoneId: 'zone-w-highvalue' },
+    { shiftId: 'shift-warehouse-night', robotId: 'robot-w-02', startingZoneId: 'zone-w-dockA'      },
+  ],
+};
+
 // ─── Scenario registry ────────────────────────────────────────────────────────
 
 export const scenarios: Record<string, ScenarioData> = {
   berghain,
   festival,
   construction,
+  warehouse,
 };
 
 // Legacy named exports kept for any existing direct imports

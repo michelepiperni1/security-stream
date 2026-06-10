@@ -63,3 +63,45 @@ export const buildGuardStatusMap = (
   }
   return map;
 };
+
+export interface RobotStatus {
+  lastZone: string | null;
+  batteryPct: number | null;
+  status: 'patrolling' | 'charging' | 'idle' | 'fault' | null;
+  lastLat: number | null;
+  lastLng: number | null;
+}
+
+export const getRobotAlertLevel = (s: RobotStatus): AlertLevel => {
+  if (s.status === 'fault') return 'critical';
+  if ((s.batteryPct ?? 100) < 20) return 'elevated';
+  return 'normal';
+};
+
+export const buildRobotStatusMap = (
+  robotIds: string[],
+  events: SecurityEvent[],
+): Map<string, RobotStatus> => {
+  const map = new Map<string, RobotStatus>();
+  for (const id of robotIds) {
+    map.set(id, { lastZone: null, batteryPct: null, status: null, lastLat: null, lastLng: null });
+  }
+  for (const e of events) {
+    if (e.type === 'robot_gps') {
+      const s = map.get(e.robotId);
+      if (s && s.lastZone === null) {
+        s.lastZone = e.location.label;
+        s.lastLat  = e.location.lat;
+        s.lastLng  = e.location.lng;
+      }
+    }
+    if (e.type === 'robot_telemetry') {
+      const s = map.get(e.robotId);
+      if (s && s.batteryPct === null) {
+        s.batteryPct = e.batteryPct;
+        s.status     = e.status;
+      }
+    }
+  }
+  return map;
+};

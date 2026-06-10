@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { ChevronDown, ChevronUp, MapPin, Heart, BrainCircuit, History, Send, Radio, PhoneCall, Bot, Zap } from 'lucide-react';
+import { ChevronDown, ChevronUp, MapPin, Heart, Battery, BrainCircuit, History, Send, Radio, PhoneCall, Bot, Zap } from 'lucide-react';
 import type { ShiftInfo, SecurityEvent, GuardMessage, GuardMemo, ShiftMemo, VenueNote, AgentAction, Incident } from '@/types';
-import { buildGuardStatusMap, getAlertLevel, ALERT_DOT, ALERT_HR_COLOR } from '@/lib/guardAlertLevel';
+import { buildGuardStatusMap, getAlertLevel, ALERT_DOT, ALERT_HR_COLOR, buildRobotStatusMap, getRobotAlertLevel } from '@/lib/guardAlertLevel';
 
 interface Props {
   shift: ShiftInfo | null;
@@ -12,8 +12,8 @@ interface Props {
   venueNotes: VenueNote[];
   agentActions: AgentAction[];
   incidents: Map<string, Incident>;
-  selectedGuardId: string | null;
-  onSelectGuard: (id: string | null) => void;
+  selectedUnitId: string | null;
+  onSelectUnit: (id: string | null) => void;
 }
 
 const ACTION_ICON: Record<string, React.ReactNode> = {
@@ -79,7 +79,7 @@ const INCIDENT_DOT: Record<Incident['status'], string> = {
   escalated:   'bg-amber-400',
 };
 
-const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, agentActions, incidents, selectedGuardId, onSelectGuard }: Props) => {
+const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, agentActions, incidents, selectedUnitId, onSelectUnit }: Props) => {
   const [goalExpanded, setGoalExpanded] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [dispatchExpanded, setDispatchExpanded] = useState(false);
@@ -101,12 +101,17 @@ const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, agentActions,
     [shift, events],
   );
 
+  const robotStatus = useMemo(
+    () => buildRobotStatusMap(shift?.robots.map(r => r.id) ?? [], events),
+    [shift, events],
+  );
+
   const guardMessages = useMemo(
     () =>
       events
         .filter((e): e is GuardMessage => e.type === 'message')
-        .filter(e => selectedGuardId === null || e.guardId === selectedGuardId),
-    [events, selectedGuardId],
+        .filter(e => selectedUnitId === null || e.guardId === selectedUnitId),
+    [events, selectedUnitId],
   );
 
   type MessageFeedItem =
@@ -117,10 +122,10 @@ const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, agentActions,
     const guardItems: MessageFeedItem[] = guardMessages.map(m => ({ kind: 'guard', msg: m, ts: m.timestamp }));
     const aiItems: MessageFeedItem[] = agentActions
       .filter(a => a.type === 'message_guard' || a.type === 'broadcast_alert')
-      .filter(a => selectedGuardId === null || a.guardId === selectedGuardId || !a.guardId)
+      .filter(a => selectedUnitId === null || a.guardId === selectedUnitId || !a.guardId)
       .map(a => ({ kind: 'ai', action: a, ts: a.timestamp }));
     return [...guardItems, ...aiItems].sort((a, b) => b.ts.localeCompare(a.ts));
-  }, [guardMessages, agentActions, selectedGuardId]);
+  }, [guardMessages, agentActions, selectedUnitId]);
 
   if (!shift) {
     return (
@@ -130,12 +135,17 @@ const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, agentActions,
     );
   }
 
-  const selectedGuard = shift.guards.find(g => g.id === selectedGuardId) ?? null;
-  const selectedMemo = selectedGuardId ? memos.get(selectedGuardId) ?? null : null;
-  const selectedLevel = selectedGuardId ? getAlertLevel(guardStatus.get(selectedGuardId)!) : 'normal';
+  const selectedGuard = shift.guards.find(g => g.id === selectedUnitId) ?? null;
+  const selectedRobot = shift.robots.find(r => r.id === selectedUnitId) ?? null;
+  const selectedMemo = selectedUnitId ? memos.get(selectedUnitId) ?? null : null;
+  const selectedLevel = selectedGuard
+    ? getAlertLevel(guardStatus.get(selectedGuard.id)!)
+    : selectedRobot
+    ? getRobotAlertLevel(robotStatus.get(selectedRobot.id)!)
+    : 'normal';
 
   const filteredActions = agentActions.filter(a =>
-    selectedGuardId === null || a.guardId === selectedGuardId || !a.guardId
+    selectedUnitId === null || a.guardId === selectedUnitId || !a.guardId
   );
   const visibleActions = dispatchExpanded ? filteredActions : filteredActions.slice(0, 5);
 
@@ -147,7 +157,7 @@ const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, agentActions,
         <div className="flex items-start justify-between gap-2 mb-1">
           <span className="text-xs font-semibold uppercase tracking-widest text-slate-400">Shift</span>
           <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${ACTIVITY_BADGE[shift.expectedActivity] ?? ACTIVITY_BADGE.normal}`}>
-            {shift.expectedActivity}
+            Activity: {shift.expectedActivity}
           </span>
         </div>
         <p className="text-sm font-semibold text-slate-100">{shift.venueName}</p>
@@ -294,12 +304,12 @@ const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, agentActions,
           {shift.guards.map(guard => {
             const status = guardStatus.get(guard.id)!;
             const lv = getAlertLevel(status);
-            const selected = selectedGuardId === guard.id;
+            const selected = selectedUnitId === guard.id;
             const hasMemo = memos.has(guard.id);
             return (
               <button
                 key={guard.id}
-                onClick={() => onSelectGuard(selected ? null : guard.id)}
+                onClick={() => onSelectUnit(selected ? null : guard.id)}
                 className={`w-full text-left px-3 py-2 rounded-md transition-colors cursor-pointer ${
                   selected
                     ? 'bg-slate-700 ring-1 ring-slate-500'
@@ -337,6 +347,61 @@ const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, agentActions,
         </div>
       </div>
 
+      {/* Robots */}
+      {shift.robots.length > 0 && (
+        <div className="px-4 pt-3 pb-2 shrink-0 border-b border-slate-700/50">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-semibold uppercase tracking-widest text-slate-400">Robots</span>
+            <span className="text-[10px] text-slate-600">{shift.robots.length} active</span>
+          </div>
+          <div className="space-y-1">
+            {shift.robots.map(robot => {
+              const status = robotStatus.get(robot.id)!;
+              const lv = getRobotAlertLevel(status);
+              const selected = selectedUnitId === robot.id;
+              const hasMemo = memos.has(robot.id);
+              return (
+                <button
+                  key={robot.id}
+                  onClick={() => onSelectUnit(selected ? null : robot.id)}
+                  className={`w-full text-left px-3 py-2 rounded-md transition-colors cursor-pointer ${
+                    selected
+                      ? 'bg-slate-700 ring-1 ring-slate-500'
+                      : 'bg-slate-800/50 hover:bg-slate-800'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className={`h-2 w-2 rounded-full shrink-0 ${ALERT_DOT[lv]}`} />
+                    <span className="text-xs font-medium text-slate-200 flex-1 truncate">{robot.name}</span>
+                    {hasMemo && <BrainCircuit className="h-3 w-3 text-slate-500 shrink-0" />}
+                    <span className="text-[10px] text-slate-500 shrink-0">{robot.model}</span>
+                  </div>
+                  <div className="flex items-center gap-3 mt-0.5 pl-4">
+                    {status.lastZone && (
+                      <span className="flex items-center gap-0.5 text-[10px] text-slate-500">
+                        <MapPin className="h-2.5 w-2.5" />
+                        {status.lastZone}
+                      </span>
+                    )}
+                    {status.batteryPct !== null && (
+                      <span className={`flex items-center gap-0.5 text-[10px] ${ALERT_HR_COLOR[lv]}`}>
+                        <Battery className="h-2.5 w-2.5" />
+                        {status.batteryPct}%
+                      </span>
+                    )}
+                    {status.status && (
+                      <span className="text-[10px] text-slate-600">
+                        {status.status}
+                      </span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* AI Assessment — shown when a guard with a memo is selected */}
       {selectedMemo && (
         <div className="px-4 pt-3 pb-3 shrink-0 border-b border-slate-700/50">
@@ -358,8 +423,8 @@ const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, agentActions,
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold uppercase tracking-widest text-slate-400">
             Messages
-            {selectedGuard && (
-              <span className="normal-case font-normal text-slate-600 ml-1">· {selectedGuard.name}</span>
+            {(selectedGuard || selectedRobot) && (
+              <span className="normal-case font-normal text-slate-600 ml-1">· {(selectedGuard ?? selectedRobot)!.name}</span>
             )}
           </span>
           {messages.length > 0 && (
@@ -374,7 +439,7 @@ const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, agentActions,
         <div className="px-4 pb-3 pt-1 space-y-1.5 min-h-full bg-slate-900">
           {messages.length === 0 && (
             <p className="text-[11px] text-slate-600 pt-1">
-              {selectedGuardId ? 'No messages from this guard' : 'No messages yet'}
+              {selectedUnitId ? 'No messages from this guard' : 'No messages yet'}
             </p>
           )}
           {messages.map(item => {
@@ -383,7 +448,7 @@ const ShiftPanel = ({ shift, events, memos, shiftMemo, venueNotes, agentActions,
               return (
                 <div key={msg.id} className="text-[11px] leading-relaxed">
                   <span className="font-mono text-slate-600 mr-1.5">{fmtTime(msg.timestamp)}</span>
-                  {selectedGuardId === null && (
+                  {selectedUnitId === null && (
                     <span className="font-medium text-slate-400 mr-1">
                       {msg.guardName.split(' ')[0]}
                     </span>

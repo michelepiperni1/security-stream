@@ -8,6 +8,7 @@ export interface LLMDecision {
   venueNote?: string;
   thinking?: string;
   dispatchGuardId?: string;
+  dispatchRobotId?: string;
   dispatchMessage?: string;
 }
 

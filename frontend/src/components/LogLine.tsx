@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { MapPin, Heart, MessageSquare, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
+import { MapPin, Heart, MessageSquare, AlertTriangle, ChevronDown, ChevronUp, Bot, Battery, Radar } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import type { SecurityEvent, Decision, GpsEvent, WearableEvent, GuardMessage, PanicEvent } from '@/types';
+import type { SecurityEvent, Decision, GpsEvent, WearableEvent, GuardMessage, PanicEvent, RobotGpsEvent, RobotTelemetryEvent, RobotAlertEvent } from '@/types';
 
 const PRIORITY_COLOR: Record<number, string> = {
   1: 'text-slate-500',
@@ -71,6 +71,62 @@ const PanicLine = ({ event }: { event: PanicEvent }) => (
   </div>
 );
 
+const RobotGpsLine = ({ event }: { event: RobotGpsEvent }) => (
+  <div className="flex items-center gap-1.5 flex-wrap">
+    <span className="text-slate-600 shrink-0">[{formatTime(event.timestamp)}]</span>
+    <Bot className="h-3 w-3 text-slate-700 shrink-0" />
+    <span className="text-slate-600">{event.robotName}</span>
+    <span className="text-slate-700 shrink-0">@</span>
+    <span className="text-slate-600">{event.location.label}</span>
+    {event.outOfHours && <span className="text-amber-600 shrink-0">[out-of-hours]</span>}
+  </div>
+);
+
+const RobotTelemetryLine = ({ event }: { event: RobotTelemetryEvent }) => {
+  const anomaly = event.status === 'fault' || event.batteryPct < 20;
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      <span className="text-slate-600 shrink-0">[{formatTime(event.timestamp)}]</span>
+      <Battery className="h-3 w-3 text-slate-600 shrink-0" />
+      <span className={anomaly ? 'text-slate-400' : 'text-slate-600'}>{event.robotName}</span>
+      <span className="text-slate-700 shrink-0">·</span>
+      <span className={event.batteryPct < 20 ? 'text-amber-400' : 'text-slate-600'}>
+        {event.batteryPct}%
+      </span>
+      <span className="text-slate-700 shrink-0">·</span>
+      <span className={event.status === 'fault' ? 'text-amber-400' : 'text-slate-600'}>
+        {event.status}
+      </span>
+    </div>
+  );
+};
+
+const RobotAlertLine = ({ event }: { event: RobotAlertEvent }) => {
+  if (event.alertType === 'system_fault') {
+    return (
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-red-600 shrink-0">[{formatTime(event.timestamp)}]</span>
+        <AlertTriangle className="h-3 w-3 text-red-400 shrink-0" />
+        <span className="text-red-300 font-semibold shrink-0">{event.robotName}</span>
+        <span className="text-red-500 shrink-0">·</span>
+        <span className="text-red-400 font-semibold">SYSTEM FAULT</span>
+        <span className="text-red-600 shrink-0">·</span>
+        <span className="text-red-400">{event.content}</span>
+      </div>
+    );
+  }
+  const urgent = event.alertType !== 'status_update';
+  return (
+    <div className="flex items-start gap-1.5 flex-wrap">
+      <span className="text-slate-500 shrink-0">[{formatTime(event.timestamp)}]</span>
+      <Radar className="h-3 w-3 text-slate-400 shrink-0 mt-[1px]" />
+      <span className="text-slate-300 shrink-0">{event.robotName}</span>
+      <span className="text-slate-600 shrink-0">·</span>
+      <span className={urgent ? 'text-slate-200' : 'text-slate-400'}>&ldquo;{event.content}&rdquo;</span>
+    </div>
+  );
+};
+
 // --- decision line ---
 
 const DecisionLine = ({ decision }: { decision: Decision }) => {
@@ -112,10 +168,13 @@ interface Props {
 
 const LogLine = ({ event, decision }: Props) => (
   <div className="py-1 font-mono text-xs leading-relaxed border-b border-slate-800/60 last:border-0">
-    {event.type === 'gps'      && <GpsLine     event={event} />}
-    {event.type === 'wearable' && <WearableLine event={event} />}
-    {event.type === 'message'  && <MessageLine  event={event} />}
-    {event.type === 'panic'    && <PanicLine    event={event} />}
+    {event.type === 'gps'             && <GpsLine            event={event} />}
+    {event.type === 'wearable'        && <WearableLine       event={event} />}
+    {event.type === 'message'         && <MessageLine        event={event} />}
+    {event.type === 'panic'           && <PanicLine          event={event} />}
+    {event.type === 'robot_gps'       && <RobotGpsLine       event={event} />}
+    {event.type === 'robot_telemetry' && <RobotTelemetryLine event={event} />}
+    {event.type === 'robot_alert'     && <RobotAlertLine     event={event} />}
     {decision && <DecisionLine decision={decision} />}
   </div>
 );

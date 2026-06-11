@@ -122,6 +122,11 @@ const App = () => {
       setAgentActions(prev => [action, ...prev].slice(0, 100));
     });
 
+    es.addEventListener('incident_created', (e) => {
+      const incident = JSON.parse((e as MessageEvent).data) as Incident;
+      setIncidents(prev => new Map(prev).set(incident.agentActionId, incident));
+    });
+
     es.addEventListener('incident_update', (e) => {
       const update = JSON.parse((e as MessageEvent).data) as { id: string; agentActionId: string; status: Incident['status']; resolvedAt: string };
       setIncidents(prev => {

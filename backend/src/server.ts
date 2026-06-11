@@ -5,7 +5,7 @@ import { simulator, start, pauseSimulator, resumeSimulator, isSimulatorPaused } 
 import type { GpsEvent, WearableEvent, GuardMessage, PanicEvent, RobotGpsEvent, RobotTelemetryEvent, RobotAlertEvent, SecurityEvent } from './events.js';
 import { randomUUID } from 'crypto';
 import { saveEvent, saveDecision, saveGuardMemo, loadGuardMemos, saveRobotMemo, loadRobotMemos, saveRobotEvent, saveShiftMemo, loadShiftMemo, appendVenueNote, loadRecentVenueNotes, saveAgentAction, loadRecentAgentActions, loadAgentAction, saveIncident, resolveIncident, loadIncident, loadRecentIncidents, getRecentHistory, seedIfEmpty, loadActiveShifts } from './db.js';
-import type { GuardProfile, RobotProfile, LoadedShift } from './db.js';
+import type { GuardProfile, RobotProfile, LoadedShift, Incident } from './db.js';
 import { scenarios } from './seed.js';
 
 let loadedShifts: LoadedShift[] = [];
@@ -112,7 +112,6 @@ const dispatch = (event: GpsEvent | WearableEvent | GuardMessage | PanicEvent) =
   const sState = state.shiftId ? shiftState.get(state.shiftId) ?? null : null;
 
   const availableGuards = [...guardState.entries()]
-    .filter(([id]) => id !== event.guardId)
     .map(([id, gs]) => ({
       id,
       name: gs.profile?.name ?? id,
@@ -175,7 +174,9 @@ const executeAction = (decision: DecisionWithThinking, sState: ShiftState | null
   const locationId = sState?.locationId ?? '';
   const createIncident = (agentActionId: string) => {
     if (!locationId) return;
-    saveIncident({ id: randomUUID(), agentActionId, locationId, timestamp: now, status: 'open' });
+    const incident: Incident = { id: randomUUID(), agentActionId, locationId, timestamp: now, status: 'open' };
+    saveIncident(incident);
+    broadcast('incident_created', incident);
   };
 
   if (action === 'message_guard' && decision.dispatchGuardId && decision.dispatchMessage) {

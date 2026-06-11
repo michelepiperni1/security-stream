@@ -26,7 +26,7 @@ Dashboard at `http://localhost:5173`, simulator at `http://localhost:5173/#/sim`
 
 ## How it works
 
-**Event pipeline:** Simulator emits GPS, wearable, message, and panic events for guards, plus `robot_gps`, `robot_telemetry`, and `robot_alert` events for patrol robots. Wearable events above threshold (HR > 90, running, fall) and all messages/panics trigger an AI decision for guards; robot telemetry that drops below 20% battery or reports a fault, plus all robot alerts, trigger an AI decision for robots.
+**Event pipeline:** Simulator emits GPS, wearable, message, and panic events for guards, plus `robot_gps`, `robot_telemetry`, and `robot_alert` events for patrol robots. Wearable events above threshold (HR > 160, running, fall) and all messages/panics trigger an AI decision for guards; robot telemetry that drops below 20% battery or reports a fault, plus all robot alerts, trigger an AI decision for robots. On boot, each guard and robot emits one initial GPS/telemetry reading at its starting zone — even while paused — so the map and shift panel show positions immediately.
 
 **AI context per decision:** guard profile, recent wearable history, last GPS location, per-guard memo (AI-written, rewritten each decision), shift memo (overall shift state), venue history (persistent across shifts). Robots get an analogous context — model/capability profile, recent battery/status telemetry, last GPS location, and a per-robot memo.
 

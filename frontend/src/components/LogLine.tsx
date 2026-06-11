@@ -28,14 +28,14 @@ const GpsLine = ({ event }: { event: GpsEvent }) => (
 );
 
 const WearableLine = ({ event }: { event: WearableEvent }) => {
-  const anomaly = event.movement === 'fall_detected' || event.movement === 'running' || event.heartRateBpm > 90;
+  const anomaly = event.movement === 'fall_detected' || event.movement === 'running' || event.heartRateBpm > 160;
   return (
     <div className="flex items-center gap-1.5 flex-wrap">
       <span className="text-slate-600 shrink-0">[{formatTime(event.timestamp)}]</span>
       <Heart className="h-3 w-3 text-slate-600 shrink-0" />
       <span className={anomaly ? 'text-slate-400' : 'text-slate-600'}>{event.guardName}</span>
       <span className="text-slate-700 shrink-0">·</span>
-      <span className={event.heartRateBpm > 90 ? 'text-amber-400' : 'text-slate-600'}>
+      <span className={event.heartRateBpm > 160 ? 'text-amber-400' : 'text-slate-600'}>
         HR {event.heartRateBpm} bpm
       </span>
       <span className="text-slate-700 shrink-0">·</span>

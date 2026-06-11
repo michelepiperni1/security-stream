@@ -312,7 +312,7 @@ simulator.on('wearable', (event: WearableEvent) => {
   const triggered =
     event.movement === 'fall_detected' ||
     event.movement === 'running' ||
-    event.heartRateBpm > 90;
+    event.heartRateBpm > 160;
 
   if (triggered) dispatch(event);
 });

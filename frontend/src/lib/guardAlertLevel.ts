@@ -13,7 +13,7 @@ export type AlertLevel = 'normal' | 'elevated' | 'critical';
 
 export const getAlertLevel = (s: GuardStatus): AlertLevel => {
   if (s.lastMovement === 'fall_detected' || (s.lastHr ?? 0) > 130) return 'critical';
-  if (s.lastMovement === 'running' || (s.lastHr ?? 0) > 90) return 'elevated';
+  if (s.lastMovement === 'running' || (s.lastHr ?? 0) > 160) return 'elevated';
   return 'normal';
 };
 

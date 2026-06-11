@@ -8,7 +8,7 @@ export class ClaudeProvider implements LLMProvider {
     const response = await client.messages.create({
       model: 'claude-opus-4-8',
       max_tokens: 4000,
-      thinking: { type: 'adaptive' },
+      thinking: { type: 'adaptive', display: 'summarized' },
       system: systemPrompt,
       messages: [{ role: 'user', content: userMessage }],
       output_config: {
